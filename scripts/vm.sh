@@ -110,6 +110,7 @@ runcmd:
   - chmod 755 /usr/local/bin/cloudflared
   - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
   - sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+  - sed -i 's/^#\?AuthenticationMethods.*/AuthenticationMethods any/' /etc/ssh/sshd_config
   - ssh-keygen -A || true
   - systemctl daemon-reload
   - systemctl enable --now cloudflared hello
