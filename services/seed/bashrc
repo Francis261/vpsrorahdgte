@@ -1,0 +1,5 @@
+# ~/.bashrc seed for the VPS container
+if [ -f /etc/bash.bashrc ]; then . /etc/bash.bashrc; fi
+PS1='\[\033[01;32m\]\u@vps\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+alias ll='ls -lah'
+alias pm2='pm2 list'

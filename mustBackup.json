@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "containers": ["vps"],
+  "host_paths": ["/root/.bashrc", "/root/.config/opencode"],
+  "handoff_after_min": 300,
+  "tunnel": {
+    "type": "cloudflare-access",
+    "hostname": "vps.example.com",
+    "ssh_hostname": "ssh.vps.example.com",
+    "tunnel_name": "vps",
+    "tunnel_uuid": "REPLACE_WITH_YOUR_TUNNEL_UUID",
+    "web_port": 8080,
+    "ssh_port": 22
+  }
+}

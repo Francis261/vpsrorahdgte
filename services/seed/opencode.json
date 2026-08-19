@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "chatbridge/chatgpt",
+  "provider": {
+    "chatbridge": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Chat Bridge",
+      "options": {
+        "baseURL": "https://downloading-moving-encoding-sheep.trycloudflare.com/v1"
+      },
+      "models": {
+        "chatgpt": { "name": "ChatGPT" },
+        "gemini": { "name": "Gemini" },
+        "deepseek": { "name": "DeepSeek" },
+        "qwen": { "name": "Qwen" }
+      }
+    }
+  }
+}

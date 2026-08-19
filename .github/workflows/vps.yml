@@ -1,0 +1,61 @@
+name: VPS Relay
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_restore:
+        description: 'Start fresh without restoring from Drive'
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [handoff]
+
+concurrency:
+  group: vps-relay
+  cancel-in-progress: false
+
+jobs:
+  vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    permissions:
+      contents: read
+    env:
+      RCLONE_CONFIG: /tmp/rclone.conf
+      GDRIVE_SA_FILE: /tmp/gdrive-sa.json
+      GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+      DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+      HANDOFF_PAT: ${{ secrets.HANDOFF_PAT }}
+      CF_TUNNEL_CREDS: ${{ secrets.CF_TUNNEL_CREDS }}
+      RUN_ID: ${{ github.run_id }}
+      SKIP_RESTORE: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_restore || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rclone
+        run: |
+          curl -fsSL -o /tmp/rclone.zip https://downloads.rclone.org/rclone-current-linux-amd64.zip
+          cd /tmp && unzip -o rclone.zip >/dev/null
+          sudo cp /tmp/rclone-*-linux-amd64/rclone /usr/local/bin/rclone
+          rclone version
+
+      - name: Restore state from Drive
+        run: bash scripts/restore.sh
+
+      - name: Acquire lease
+        run: bash scripts/lease.sh acquire "${{ github.repository }}" "${{ github.run_id }}"
+
+      - name: Start VPS container
+        run: bash scripts/run.sh
+
+      - name: Start heartbeat (background)
+        run: |
+          nohup bash scripts/heartbeat.sh "${{ github.repository }}" "${{ github.run_id }}" >/tmp/heartbeat.log 2>&1 &
+          echo "heartbeat pid $!"
+
+      - name: Hold -> backup -> handoff
+        run: bash scripts/loop.sh
+
+      - name: Stop heartbeat
+        if: always()
+        run: pkill -f 'scripts/heartbeat.sh' || true

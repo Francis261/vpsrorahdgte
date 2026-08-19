@@ -1,0 +1,3 @@
+# Paste the public keys you want to SSH into the VPS (one per line).
+# Example:
+# ssh-ed25519 AAAA...you@laptop
