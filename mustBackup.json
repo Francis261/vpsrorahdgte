@@ -1,7 +1,12 @@
 {
-  "version": 1,
-  "containers": ["vps"],
-  "host_paths": ["/root/.bashrc", "/root/.config/opencode"],
+  "version": 2,
+  "vm": {
+    "name": "vps",
+    "image": "ubuntu:24.04",
+    "cpu": 2,
+    "mem": "4GiB",
+    "disk": "8GiB"
+  },
   "handoff_after_min": 300,
   "tunnel": {
     "type": "cloudflare-access-token",

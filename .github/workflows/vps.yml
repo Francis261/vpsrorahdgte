@@ -41,14 +41,22 @@ jobs:
           sudo cp /tmp/rclone-*-linux-amd64/rclone /usr/local/bin/rclone
           rclone version
 
+      - name: Enable KVM and install LXD
+        run: |
+          sudo chmod 666 /dev/kvm 2>/dev/null || true
+          sudo snap install lxd
+          sudo lxd init --minimal
+          export PATH="$PATH:/snap/bin"
+          lxc version
+
       - name: Restore state from Drive
         run: bash scripts/restore.sh
 
       - name: Acquire lease
         run: bash scripts/lease.sh acquire "${{ github.repository }}" "${{ github.run_id }}"
 
-      - name: Start VPS container
-        run: bash scripts/run.sh
+      - name: Start VPS VM (LXD)
+        run: bash scripts/vm.sh
 
       - name: Start heartbeat (background)
         run: |

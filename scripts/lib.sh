@@ -25,6 +25,7 @@ self_repo() { echo "${GITHUB_REPOSITORY:-unknown/unknown}"; }
 # --- mustBackup.json helpers ---
 must_jq() { jq -r "$1" "$REPO_ROOT/mustBackup.json" 2>/dev/null || echo "$2"; }
 handoff_after_min()     { must_jq '.handoff_after_min // 300' 300; }
+vm_name()               { must_jq '.vm.name // "vps"' vps; }
 tunnel_hostname()       { must_jq '.tunnel.hostname // ""' ""; }
 tunnel_ssh_hostname()   { must_jq '.tunnel.ssh_hostname // ""' ""; }
 tunnel_uuid()           { must_jq '.tunnel.tunnel_uuid // ""' ""; }
@@ -136,3 +137,9 @@ lease_touch() {
   [ -n "$since" ] || since="$(now_iso)"
   lease_write "$holder" "$since" "$(now_iso)" "$next" "$run_id"
 }
+
+# --- LXD ---
+# Runner user needs sudo for the lxd daemon socket; the snap binary lives in
+# /snap/bin which may not be on sudo's PATH.
+LXC_BIN="${LXC_BIN:-$(command -v lxc || echo /snap/bin/lxc)}"
+lxc() { sudo "$LXC_BIN" "$@"; }
