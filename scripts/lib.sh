@@ -55,7 +55,17 @@ next_repo() {
 # --- rclone ---
 setup_rclone() {
   if [ -n "${GDRIVE_SERVICE_ACCOUNT_JSON:-}" ]; then
-    echo "$GDRIVE_SERVICE_ACCOUNT_JSON" > "$GDRIVE_SA_FILE"
+    printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON" > "$GDRIVE_SA_FILE"
+    # Normalize the private key so it always contains real newlines,
+    # regardless of whether the secret stored literal \n or \\n escapes.
+    python3 - "$GDRIVE_SA_FILE" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+if "private_key" in d:
+    d["private_key"] = d["private_key"].replace("\\n", "\n")
+json.dump(d, open(p, "w"))
+PY
   fi
   [ -f "$GDRIVE_SA_FILE" ] || die "service account file missing at $GDRIVE_SA_FILE (set GDRIVE_SERVICE_ACCOUNT_JSON secret)"
   : "${DRIVE_FOLDER_ID:?DRIVE_FOLDER_ID not set (secret)}"
