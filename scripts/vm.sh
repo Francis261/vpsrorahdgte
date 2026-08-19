@@ -3,7 +3,8 @@
 # (lxc import) and we just start it; otherwise we launch a fresh Ubuntu cloud
 # image VM with cloud-init seeding (sshd + root password, cloudflared tunnel,
 # hello web app, opencode). Records a restart script for loop.sh's health
-# checks so the VM can be brought back if it ever dies.
+# checks. Boot progress + failure logs are mirrored to Google Drive so they can
+# be inspected without GitHub job-log access.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -12,6 +13,21 @@ IMAGE="$(must_jq '.vm.image // "ubuntu:24.04"' ubuntu:24.04)"
 CPU="$(must_jq '.vm.cpu // 2' 2)"
 MEM="$(must_jq '.vm.mem // "4GiB"' 4GiB)"
 DISK="$(must_jq '.vm.disk // "8GiB"' 8GiB)"
+POOL="${VM_POOL:-vmpool}"
+
+BOOTLOG=/tmp/vm-boot.log
+: > "$BOOTLOG"
+vlog() { log "$*"; echo "$(date -u +%FT%TZ) $*" >> "$BOOTLOG"; }
+
+fail() {
+  vlog "FATAL: $*"
+  if setup_rclone >/dev/null 2>&1; then
+    rclone --config "$RCLONE_CONFIG" copyto "$BOOTLOG" "${GDRIVE_REMOTE}vm-boot-fail.log" 2>/dev/null \
+      && vlog "boot log uploaded to Drive (vm-boot-fail.log)" || true
+  fi
+  exit 1
+}
+trap 'fail "unexpected error at line $LINENO"' ERR
 
 : "${CF_TUNNEL_TOKEN:?CF_TUNNEL_TOKEN not set (secret) - required to seed cloudflared}"
 
@@ -92,42 +108,62 @@ runcmd:
   - mkdir -p /etc/cloudflared /app/services/hello /root/.config/opencode /root/.ssh
   - curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
   - chmod 755 /usr/local/bin/cloudflared
-  - npm install -g pm2
-  - curl -fsSL https://opencode.ai/install | bash
-  - ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode
   - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
   - sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
   - ssh-keygen -A || true
   - systemctl daemon-reload
   - systemctl enable --now cloudflared hello
   - systemctl reload ssh || systemctl restart ssh
+  - nohup bash -c 'npm install -g pm2 >/tmp/seed-extra.log 2>&1; curl -fsSL https://opencode.ai/install | bash >>/tmp/seed-extra.log 2>&1; ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode >>/tmp/seed-extra.log 2>&1' >/dev/null 2>&1 &
 """
 pathlib.Path(out).write_text(yaml)
 PY
-  log "user-data rendered to $out"
+  vlog "user-data rendered to $out"
 }
 
+# --- phase 1: instance must exist and be running ---
 if lxc info "$VM_NAME" >/dev/null 2>&1; then
-  log "VM $VM_NAME exists (restored); starting it"
+  vlog "VM $VM_NAME exists (restored); starting it"
   lxc start "$VM_NAME"
 else
-  log "VM $VM_NAME not found; launching fresh from $IMAGE"
+  vlog "VM $VM_NAME not found; launching fresh from $IMAGE on pool $POOL"
   render_userdata /tmp/user-data.yml
-  lxc launch "$IMAGE" "$VM_NAME" --vm \
+  lxc launch "$IMAGE" "$VM_NAME" --vm --storage "$POOL" \
     -c limits.cpu="$CPU" \
     -c limits.memory="$MEM" \
     -d root,size="$DISK" \
     -c user.user-data="$(cat /tmp/user-data.yml)"
 fi
 
-log "waiting for VM sshd to come up"
+vlog "waiting for instance status Running"
+for i in $(seq 1 90); do
+  ST="$(lxc list "$VM_NAME" --format json 2>/dev/null \
+        | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0].get("status",""))' 2>/dev/null || true)"
+  [ "$ST" = "Running" ] && { vlog "instance Running (${i} tries)"; break; }
+  sleep 5
+  [ "$i" -eq 90 ] && fail "instance never reached Running (status='$ST')"
+done
+
+# --- phase 2: lxd agent must respond ---
+vlog "waiting for lxd agent"
 for i in $(seq 1 120); do
-  if lxc exec "$VM_NAME" -- systemctl is-active ssh >/dev/null 2>&1; then
-    log "VM sshd ready after ${i} tries"
+  if lxc exec "$VM_NAME" -- true >/dev/null 2>&1; then
+    vlog "lxd agent ready (${i} tries)"
     break
   fi
   sleep 5
-  [ "$i" -eq 120 ] && die "VM $VM_NAME failed to become ready in time"
+  [ "$i" -eq 120 ] && fail "lxd agent never responded"
+done
+
+# --- phase 3: sshd must be active ---
+vlog "waiting for sshd"
+for i in $(seq 1 180); do
+  if lxc exec "$VM_NAME" -- systemctl is-active ssh >/dev/null 2>&1; then
+    vlog "VM sshd ready (${i} tries)"
+    break
+  fi
+  sleep 5
+  [ "$i" -eq 180 ] && fail "VM sshd never became active"
 done
 
 cat > /tmp/vm-restart.sh <<EOF
@@ -137,4 +173,5 @@ sudo "$LXC_BIN" restart "$VM_NAME" 2>/dev/null || sudo "$LXC_BIN" start "$VM_NAM
 EOF
 chmod +x /tmp/vm-restart.sh
 
-log "VM $VM_NAME is up"
+vlog "VM $VM_NAME is up"
+trap - ERR

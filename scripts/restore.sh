@@ -23,5 +23,5 @@ fi
 
 log "restoring newest backup: $latest"
 rclone --config "$RCLONE_CONFIG" copy "${BACKUP_REMOTE}${latest}" "$STAGE/"
-lxc import "$STAGE/$latest" || die "lxc import failed for $latest"
+lxc import "$STAGE/$latest" --storage "${VM_POOL:-vmpool}" || die "lxc import failed for $latest"
 log "restore complete"

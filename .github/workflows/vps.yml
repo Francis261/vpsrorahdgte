@@ -47,6 +47,11 @@ jobs:
           sudo snap install lxd
           sudo lxd init --minimal
           export PATH="$PATH:/snap/bin"
+          # dir storage (lxd init --minimal default) cannot host VMs: create a
+          # dedicated VM-capable pool (btrfs on a loop file).
+          sudo lxc storage create vmpool btrfs size=12GiB \
+            || sudo lxc storage create vmpool zfs size=12GiB
+          sudo lxc storage show vmpool
           lxc version
 
       - name: Restore state from Drive
