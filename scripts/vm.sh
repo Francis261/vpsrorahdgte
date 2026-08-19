@@ -61,14 +61,7 @@ users:
     plain_text_passwd: Frank986532
     lock_passwd: false
     ssh_authorized_keys:
-{key_lines}package_update: true
-packages:
-  - curl
-  - jq
-  - openssh-server
-  - nodejs
-  - npm
-write_files:
+{key_lines}write_files:
   - path: /etc/cloudflared/token
     content: '{token}'
     permissions: '0600'
@@ -114,7 +107,7 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable --now cloudflared hello
   - systemctl reload ssh || systemctl restart ssh
-  - nohup bash -c 'npm install -g pm2 >/tmp/seed-extra.log 2>&1; curl -fsSL https://opencode.ai/install | bash >>/tmp/seed-extra.log 2>&1; ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode >>/tmp/seed-extra.log 2>&1' >/dev/null 2>&1 &
+  - nohup bash -c 'apt-get update -qq && apt-get install -y -qq nodejs npm && npm install -g pm2 >/tmp/seed-extra.log 2>&1; curl -fsSL https://opencode.ai/install | bash >>/tmp/seed-extra.log 2>&1; ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode >>/tmp/seed-extra.log 2>&1' >/dev/null 2>&1 &
 """
 pathlib.Path(out).write_text(yaml)
 PY
@@ -172,6 +165,27 @@ set -euo pipefail
 sudo "$LXC_BIN" restart "$VM_NAME" 2>/dev/null || sudo "$LXC_BIN" start "$VM_NAME" 2>/dev/null || true
 EOF
 chmod +x /tmp/vm-restart.sh
+
+# --- boot report (mirrored to Drive for out-of-band diagnosis) ---
+vlog "gathering boot report"
+sleep 20
+{
+  echo "== boot report $(date -u +%FT%TZ) =="
+  echo "--- cloud-init status ---"
+  lxc exec "$VM_NAME" -- cloud-init status 2>&1 || true
+  echo "--- cloudflared ---"
+  lxc exec "$VM_NAME" -- bash -c 'command -v cloudflared; systemctl is-active cloudflared 2>&1; ls -l /etc/cloudflared/token 2>&1' 2>&1 || true
+  echo "--- hello ---"
+  lxc exec "$VM_NAME" -- systemctl is-active hello 2>&1 || true
+  echo "--- network ---"
+  lxc exec "$VM_NAME" -- bash -c 'ip -4 addr show eth0 2>&1 | grep inet || true; curl -sS -o /dev/null -w "cloudflare.com http=%{http_code}\n" --max-time 15 https://cloudflare.com 2>&1 || true' 2>&1 || true
+  echo "--- sshd ---"
+  lxc exec "$VM_NAME" -- systemctl is-active ssh 2>&1 || true
+} > /tmp/vm-boot-report.log 2>&1
+if setup_rclone >/dev/null 2>&1; then
+  rclone --config "$RCLONE_CONFIG" copyto /tmp/vm-boot-report.log "${GDRIVE_REMOTE}vm-boot-report.log" 2>/dev/null \
+    && vlog "boot report uploaded to Drive" || true
+fi
 
 vlog "VM $VM_NAME is up"
 trap - ERR
