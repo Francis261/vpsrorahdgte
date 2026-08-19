@@ -54,6 +54,20 @@ next_repo() {
 
 # --- rclone ---
 setup_rclone() {
+  : "${DRIVE_FOLDER_ID:?DRIVE_FOLDER_ID not set (secret)}"
+  if [ -n "${RCLONE_DRIVE_TOKEN:-}" ]; then
+    # OAuth token for the account that owns the Drive folder (has real quota).
+    cat > "$RCLONE_CONFIG" <<EOF
+[gdrive]
+type = drive
+client_id = 202264815644.apps.googleusercontent.com
+client_secret = X4Z3ca8xfWDb1Voo-F9a7ZxJ
+scope = drive
+root_folder_id = $DRIVE_FOLDER_ID
+EOF
+    printf 'token = %s\n' "$RCLONE_DRIVE_TOKEN" >> "$RCLONE_CONFIG"
+    return
+  fi
   if [ -n "${GDRIVE_SERVICE_ACCOUNT_JSON:-}" ]; then
     printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON" > "$GDRIVE_SA_FILE"
     # Normalize the private key so it always contains real newlines,
@@ -70,16 +84,16 @@ if "private_key" in d:
         sys.exit("service account private_key base64 is corrupt (bad length or charset); re-issue the key")
 json.dump(d, open(p, "w"))
 PY
-  fi
-  [ -f "$GDRIVE_SA_FILE" ] || die "service account file missing at $GDRIVE_SA_FILE (set GDRIVE_SERVICE_ACCOUNT_JSON secret)"
-  : "${DRIVE_FOLDER_ID:?DRIVE_FOLDER_ID not set (secret)}"
-  cat > "$RCLONE_CONFIG" <<EOF
+    cat > "$RCLONE_CONFIG" <<EOF
 [gdrive]
 type = drive
 service_account_file = $GDRIVE_SA_FILE
 scope = drive
 root_folder_id = $DRIVE_FOLDER_ID
 EOF
+    return
+  fi
+  die "no Drive credentials: set RCLONE_DRIVE_TOKEN or GDRIVE_SERVICE_ACCOUNT_JSON secret"
 }
 
 # --- lease (lease.json lives in the shared Drive folder) ---

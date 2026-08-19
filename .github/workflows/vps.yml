@@ -24,6 +24,7 @@ jobs:
       RCLONE_CONFIG: /tmp/rclone.conf
       GDRIVE_SA_FILE: /tmp/gdrive-sa.json
       GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+      RCLONE_DRIVE_TOKEN: ${{ secrets.RCLONE_DRIVE_TOKEN }}
       DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
       HANDOFF_PAT: ${{ secrets.HANDOFF_PAT }}
       CF_TUNNEL_CREDS: ${{ secrets.CF_TUNNEL_CREDS }}
