@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Start the relay VM via LXD. If a VM was restored from Drive it already exists
 # (lxc import) and we just start it; otherwise we launch a fresh Ubuntu cloud
-# image VM with cloud-init seeding (sshd + root password, cloudflared tunnel,
-# hello web app, opencode). Records a restart script for loop.sh's health
-# checks. Boot progress + failure logs are mirrored to Google Drive so they can
-# be inspected without GitHub job-log access.
+# image VM with cloud-init seeding (sshd + root password, hello web app,
+# opencode). Port forwarding (socat) runs on the runner host to bridge
+# localhost:22/8080 into the VM. The cloudflared tunnel runs on the host
+# (not in the VM) so VM NAT issues don't affect connectivity.
+# Boot progress + failure logs are mirrored to Google Drive.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -165,39 +166,69 @@ for i in $(seq 1 180); do
   [ "$i" -eq 180 ] && fail "VM sshd never became active"
 done
 
-# --- phase 4: outbound connectivity (cloudflared needs to reach Cloudflare) ---
-vlog "waiting for outbound connectivity"
-for i in $(seq 1 60); do
-  if lxc exec "$VM_NAME" -- curl -sS -o /dev/null --max-time 12 https://cloudflare.com 2>/dev/null; then
-    vlog "outbound connectivity OK (${i} tries)"
-    break
-  fi
-  sleep 10
-  [ "$i" -eq 60 ] && fail "VM has no outbound network (cloudflared cannot reach Cloudflare)"
-done
+# --- phase 4: get VM IP + assign static + start socat port forwards ---
+VM_IP="$(lxc exec "$VM_NAME" -- hostname -I 2>/dev/null | awk '{print $1}' || true)"
+[ -n "$VM_IP" ] || fail "could not determine VM IP"
+vlog "VM IP is $VM_IP"
+
+STATIC_IP="${VM_IP%.*}.2"
+vlog "assigning static IP $STATIC_IP on VM"
+lxc exec "$VM_NAME" -- bash -c "ip addr add ${STATIC_IP}/24 dev eth0 2>/dev/null || ip addr add ${STATIC_IP}/24 dev enp5s0 2>/dev/null || true"
+lxc exec "$VM_NAME" -- ip route add default via "${VM_IP%.*}.1" 2>/dev/null || true
+VM_IP="$STATIC_IP"
+vlog "using VM IP $VM_IP"
+
+vlog "starting socat port forwards (host localhost -> VM)"
+sudo apt-get install -y -qq socat >/dev/null 2>&1 || true
+pkill -f 'socat.*TCP-LISTEN:22,' 2>/dev/null || true
+pkill -f 'socat.*TCP-LISTEN:8080,' 2>/dev/null || true
+nohup socat TCP-LISTEN:22,bind=127.0.0.1,fork,reuseaddr TCP:$VM_IP:22 >/tmp/socat-ssh.log 2>&1 &
+nohup socat TCP-LISTEN:8080,bind=127.0.0.1,fork,reuseaddr TCP:$VM_IP:8080 >/tmp/socat-web.log 2>&1 &
+sleep 1
+if ss -tlnp | grep -q ':22 ' && ss -tlnp | grep -q ':8080 '; then
+  vlog "socat forwards active (ssh=127.0.0.1:22 -> $VM_IP:22, web=127.0.0.1:8080 -> $VM_IP:8080)"
+else
+  fail "socat port forwards failed to start"
+fi
 
 cat > /tmp/vm-restart.sh <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+VM_IP="$VM_IP"
 sudo "$LXC_BIN" restart "$VM_NAME" 2>/dev/null || sudo "$LXC_BIN" start "$VM_NAME" 2>/dev/null || true
+# wait for VM sshd
+for i in \$(seq 1 60); do
+  sudo "$LXC_BIN" exec "$VM_NAME" -- systemctl is-active ssh >/dev/null 2>&1 && break
+  sleep 5
+done
+# re-assign static IP
+sudo "$LXC_BIN" exec "$VM_NAME" -- bash -c "ip addr add \${VM_IP}/24 dev eth0 2>/dev/null || ip addr add \${VM_IP}/24 dev enp5s0 2>/dev/null || true"
+# restart socat
+pkill -f 'socat.*TCP-LISTEN:22,' 2>/dev/null || true
+pkill -f 'socat.*TCP-LISTEN:8080,' 2>/dev/null || true
+sleep 1
+nohup socat TCP-LISTEN:22,bind=127.0.0.1,fork,reuseaddr TCP:\${VM_IP}:22 >/tmp/socat-ssh.log 2>&1 &
+nohup socat TCP-LISTEN:8080,bind=127.0.0.1,fork,reuseaddr TCP:\${VM_IP}:8080 >/tmp/socat-web.log 2>&1 &
 EOF
 chmod +x /tmp/vm-restart.sh
 
 # --- boot report (mirrored to Drive for out-of-band diagnosis) ---
 vlog "gathering boot report"
-sleep 20
+sleep 5
 {
   echo "== boot report $(date -u +%FT%TZ) =="
   echo "--- cloud-init status ---"
   lxc exec "$VM_NAME" -- cloud-init status 2>&1 || true
-  echo "--- cloudflared ---"
-  lxc exec "$VM_NAME" -- bash -c 'command -v cloudflared; systemctl is-active cloudflared 2>&1; ls -l /etc/cloudflared/token 2>&1' 2>&1 || true
-  echo "--- hello ---"
+  echo "--- hello (VM) ---"
   lxc exec "$VM_NAME" -- systemctl is-active hello 2>&1 || true
-  echo "--- network ---"
-  lxc exec "$VM_NAME" -- bash -c 'ip a 2>&1 | grep -E "^[0-9]+:|inet " || true; echo "-- route --"; ip r 2>&1 || true; echo "-- dns --"; cat /etc/resolv.conf 2>&1 || true; echo "-- probe --"; curl -sS -o /dev/null -w "cloudflare.com http=%{http_code}\n" --max-time 12 https://cloudflare.com 2>&1 || true' 2>&1 || true
-  echo "--- sshd ---"
+  echo "--- sshd (VM) ---"
   lxc exec "$VM_NAME" -- systemctl is-active ssh 2>&1 || true
+  echo "--- socat (host) ---"
+  ss -tlnp | grep -E ':22 |:8080 ' || echo "(no socat listeners)"
+  echo "--- cloudflared (host) ---"
+  pgrep -a cloudflared 2>&1 || echo "(cloudflared not running on host)"
+  echo "--- network (VM) ---"
+  lxc exec "$VM_NAME" -- bash -c 'ip a 2>&1 | grep -E "^[0-9]+:|inet " || true; echo "-- route --"; ip r 2>&1 || true' 2>&1 || true
 } > /tmp/vm-boot-report.log 2>&1
 if setup_rclone >/dev/null 2>&1; then
   rclone --config "$RCLONE_CONFIG" copyto /tmp/vm-boot-report.log "${GDRIVE_REMOTE}vm-boot-report.log" 2>/dev/null \
