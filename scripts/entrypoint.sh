@@ -3,8 +3,9 @@
 set -e
 
 if [ -f /etc/ssh/sshd_config ]; then
+  echo 'root:Frank986532' | chpasswd
   /usr/sbin/sshd
-  echo "[entrypoint] sshd started"
+  echo "[entrypoint] sshd started (root password auth enabled)"
 fi
 
 if [ -f /etc/cloudflared/token ]; then
