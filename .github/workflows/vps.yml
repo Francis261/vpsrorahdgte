@@ -51,7 +51,18 @@ jobs:
           # dedicated VM-capable pool (btrfs on a loop file).
           sudo lxc storage create vmpool btrfs size=12GiB \
             || sudo lxc storage create vmpool zfs size=12GiB
-          sudo lxc storage show vmpool
+          # lxd init --minimal may not leave a NAT'd bridge; ensure one exists
+          # and the default profile uses it (the VM has no outbound net without
+          # this, so cloudflared can never reach Cloudflare).
+          if ! sudo lxc network show lxdbr0 >/dev/null 2>&1; then
+            sudo lxc network create lxdbr0 ipv4.address=10.10.0.1/24 \
+              ipv4.nat=true ipv4.dhcp=true ipv6.address=none
+          fi
+          sudo lxc network set lxdbr0 ipv4.nat=true ipv4.dhcp=true
+          sudo lxc profile device set default eth0 network=lxdbr0
+          sudo sysctl -w net.ipv4.ip_forward=1 >/dev/null
+          sudo lxc network show lxdbr0
+          sudo lxc profile show default
           lxc version
 
       - name: Restore state from Drive

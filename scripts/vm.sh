@@ -21,6 +21,12 @@ vlog() { log "$*"; echo "$(date -u +%FT%TZ) $*" >> "$BOOTLOG"; }
 
 fail() {
   vlog "FATAL: $*"
+  if lxc info "$VM_NAME" >/dev/null 2>&1; then
+    {
+      echo "== vm diag =="
+      lxc exec "$VM_NAME" -- bash -c 'ip a; ip r; cat /etc/resolv.conf' 2>&1 || true
+    } >> "$BOOTLOG" || true
+  fi
   if setup_rclone >/dev/null 2>&1; then
     rclone --config "$RCLONE_CONFIG" copyto "$BOOTLOG" "${GDRIVE_REMOTE}vm-boot-fail.log" 2>/dev/null \
       && vlog "boot log uploaded to Drive (vm-boot-fail.log)" || true
@@ -159,6 +165,17 @@ for i in $(seq 1 180); do
   [ "$i" -eq 180 ] && fail "VM sshd never became active"
 done
 
+# --- phase 4: outbound connectivity (cloudflared needs to reach Cloudflare) ---
+vlog "waiting for outbound connectivity"
+for i in $(seq 1 60); do
+  if lxc exec "$VM_NAME" -- curl -sS -o /dev/null --max-time 12 https://cloudflare.com 2>/dev/null; then
+    vlog "outbound connectivity OK (${i} tries)"
+    break
+  fi
+  sleep 10
+  [ "$i" -eq 60 ] && fail "VM has no outbound network (cloudflared cannot reach Cloudflare)"
+done
+
 cat > /tmp/vm-restart.sh <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -178,7 +195,7 @@ sleep 20
   echo "--- hello ---"
   lxc exec "$VM_NAME" -- systemctl is-active hello 2>&1 || true
   echo "--- network ---"
-  lxc exec "$VM_NAME" -- bash -c 'ip -4 addr show eth0 2>&1 | grep inet || true; curl -sS -o /dev/null -w "cloudflare.com http=%{http_code}\n" --max-time 15 https://cloudflare.com 2>&1 || true' 2>&1 || true
+  lxc exec "$VM_NAME" -- bash -c 'ip a 2>&1 | grep -E "^[0-9]+:|inet " || true; echo "-- route --"; ip r 2>&1 || true; echo "-- dns --"; cat /etc/resolv.conf 2>&1 || true; echo "-- probe --"; curl -sS -o /dev/null -w "cloudflare.com http=%{http_code}\n" --max-time 12 https://cloudflare.com 2>&1 || true' 2>&1 || true
   echo "--- sshd ---"
   lxc exec "$VM_NAME" -- systemctl is-active ssh 2>&1 || true
 } > /tmp/vm-boot-report.log 2>&1
