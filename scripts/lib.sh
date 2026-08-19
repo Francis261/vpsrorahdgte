@@ -57,13 +57,17 @@ setup_rclone() {
   if [ -n "${GDRIVE_SERVICE_ACCOUNT_JSON:-}" ]; then
     printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON" > "$GDRIVE_SA_FILE"
     # Normalize the private key so it always contains real newlines,
-    # regardless of whether the secret stored literal \n or \\n escapes.
+    # regardless of whether the secret stored literal \n or \\n escapes,
+    # and sanity-check the base64 body before rclone sees it.
     python3 - "$GDRIVE_SA_FILE" <<'PY'
-import json, sys
+import json, re, sys
 p = sys.argv[1]
 d = json.load(open(p))
 if "private_key" in d:
     d["private_key"] = d["private_key"].replace("\\n", "\n")
+    b64 = "".join(d["private_key"].split("-----BEGIN PRIVATE KEY-----")[1].split("-----END PRIVATE KEY-----")[0].split())
+    if len(b64) % 4 != 0 or not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", b64):
+        sys.exit("service account private_key base64 is corrupt (bad length or charset); re-issue the key")
 json.dump(d, open(p, "w"))
 PY
   fi
