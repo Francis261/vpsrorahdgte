@@ -41,7 +41,15 @@ scripts/                       # restore / run / loop / backup / handoff / heart
 
 ## 3. Cloudflare tunnel + Access (connectivity)
 
-Run once on your machine:
+Two supported modes:
+
+**Token-based (dashboard-managed, simplest):** create the tunnel in Zero Trust →
+Networks → Tunnels, then run `cloudflared tunnel run --token <TOKEN>` from your
+machine once to get the token. Configure the tunnel's **Public Hostnames** in
+the dashboard (`http://localhost:8080` and `ssh://localhost:22`). Store the
+token in the `CF_TUNNEL_TOKEN` secret.
+
+**Named tunnel (local config):**
 
 ```sh
 cloudflared tunnel login
@@ -50,14 +58,14 @@ cloudflared tunnel route dns vps vps.example.com
 cloudflared tunnel route dns vps ssh.vps.example.com
 ```
 
+Put `credentials.json` content into the `CF_TUNNEL_CREDS` secret, and the UUID
+into `mustBackup.json` → `tunnel.tunnel_uuid`.
+
 Then in the Cloudflare dashboard:
 
 - **Zero Trust → Access → Applications** → add a self-hosted application covering
-  `vps.example.com` and `ssh.vps.example.com`, with a policy allowing your identity.
+  your web and ssh hostnames, with a policy allowing your identity.
   (This is what makes `cloudflared access ...` work from your machine.)
-
-Put `credentials.json` content into the `CF_TUNNEL_CREDS` secret, and the UUID
-into `mustBackup.json` → `tunnel.tunnel_uuid`.
 
 ## 4. Handoff PAT
 
@@ -72,7 +80,8 @@ For **each** account, create a fine-grained PAT in the **next** account's repo
 | `GDRIVE_SERVICE_ACCOUNT_JSON` | the service account JSON key |
 | `DRIVE_FOLDER_ID`             | shared Drive folder ID |
 | `HANDOFF_PAT`                 | fine-grained PAT (from the **next** account) |
-| `CF_TUNNEL_CREDS`             | `credentials.json` from `cloudflared tunnel create` |
+| `CF_TUNNEL_CREDS`             | `credentials.json` from `cloudflared tunnel create` (named-tunnel mode) |
+| `CF_TUNNEL_TOKEN`             | `cloudflared tunnel run --token <TOKEN>` token (token mode) |
 
 ## 6. First boot
 

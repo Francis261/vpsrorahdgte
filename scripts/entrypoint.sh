@@ -7,7 +7,11 @@ if [ -f /etc/ssh/sshd_config ]; then
   echo "[entrypoint] sshd started"
 fi
 
-if [ -f /etc/cloudflared/config.yml ]; then
+if [ -f /etc/cloudflared/token ]; then
+  TOKEN="$(cat /etc/cloudflared/token)"
+  (cloudflared tunnel run --token "$TOKEN" >/tmp/cloudflared.log 2>&1 &)
+  echo "[entrypoint] cloudflared (token) started"
+elif [ -f /etc/cloudflared/config.yml ]; then
   (cloudflared tunnel --config /etc/cloudflared/config.yml run >/tmp/cloudflared.log 2>&1 &)
   echo "[entrypoint] cloudflared started"
 fi

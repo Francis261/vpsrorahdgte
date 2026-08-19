@@ -11,7 +11,14 @@ if ! docker image inspect vps:latest >/dev/null 2>&1; then
 fi
 
 CF_FLAGS=""
-if [ -n "${CF_TUNNEL_CREDS:-}" ]; then
+if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
+  # Remotely-managed tunnel: token only, public hostnames live in the dashboard.
+  mkdir -p /tmp/cf
+  printf '%s' "$CF_TUNNEL_TOKEN" > /tmp/cf/token
+  chmod 600 /tmp/cf/token
+  CF_FLAGS="-v /tmp/cf/token:/etc/cloudflared/token:ro"
+  log "cloudflared token-based tunnel prepared (dashboard-managed)"
+elif [ -n "${CF_TUNNEL_CREDS:-}" ]; then
   CF_UUID="$(tunnel_uuid)"
   CF_HOST="$(tunnel_hostname)"
   CF_SSH_HOST="$(tunnel_ssh_hostname)"

@@ -27,6 +27,7 @@ jobs:
       DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
       HANDOFF_PAT: ${{ secrets.HANDOFF_PAT }}
       CF_TUNNEL_CREDS: ${{ secrets.CF_TUNNEL_CREDS }}
+      CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
       RUN_ID: ${{ github.run_id }}
       SKIP_RESTORE: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_restore || 'false' }}
     steps:

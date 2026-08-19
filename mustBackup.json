@@ -4,11 +4,11 @@
   "host_paths": ["/root/.bashrc", "/root/.config/opencode"],
   "handoff_after_min": 300,
   "tunnel": {
-    "type": "cloudflare-access",
+    "type": "cloudflare-access-token",
     "hostname": "vps.example.com",
     "ssh_hostname": "ssh.vps.example.com",
     "tunnel_name": "vps",
-    "tunnel_uuid": "REPLACE_WITH_YOUR_TUNNEL_UUID",
+    "tunnel_uuid": "5cc6fb30-0880-4409-a45e-bdea6de48153",
     "web_port": 8080,
     "ssh_port": 22
   }
