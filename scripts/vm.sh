@@ -216,15 +216,15 @@ pkill -f 'socat.*TCP-LISTEN:8080,' 2>/dev/null || true
 sudo nohup socat TCP-LISTEN:22,bind=127.0.0.1,fork,reuseaddr TCP:$VM_IP:22 >/tmp/socat-ssh.log 2>&1 &
 sudo nohup socat TCP-LISTEN:8080,bind=127.0.0.1,fork,reuseaddr TCP:$VM_IP:8080 >/tmp/socat-web.log 2>&1 &
 sleep 2
-# Verify socat actually owns the ports (not the runner's sshd)
+# Verify socat owns the ports (ports bound to 127.0.0.1 = socat, not runner sshd)
 SSH_OK=0; WEB_OK=0
-if ss -tlnp 2>/dev/null | grep -q '127.0.0.1:22.*socat'; then SSH_OK=1; fi
-if ss -tlnp 2>/dev/null | grep -q '127.0.0.1:8080.*socat'; then WEB_OK=1; fi
+if ss -tln 2>/dev/null | grep -q '127.0.0.1:22 '; then SSH_OK=1; fi
+if ss -tln 2>/dev/null | grep -q '127.0.0.1:8080 '; then WEB_OK=1; fi
 if [ "$SSH_OK" = 1 ] && [ "$WEB_OK" = 1 ]; then
   vlog "socat forwards active (ssh=127.0.0.1:22 -> $VM_IP:22, web=127.0.0.1:8080 -> $VM_IP:8080)"
 else
   echo "--- ss -tlnp ---" >> /tmp/socat-ssh.log
-  ss -tlnp >> /tmp/socat-ssh.log 2>&1 || true
+  sudo ss -tlnp >> /tmp/socat-ssh.log 2>&1 || true
   cat /tmp/socat-ssh.log /tmp/socat-web.log 2>/dev/null || true
   fail "socat port forwards failed to start (ssh_ok=$SSH_OK web_ok=$WEB_OK)"
 fi
