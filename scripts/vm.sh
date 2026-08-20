@@ -159,12 +159,24 @@ done
 # --- phase 2.5: repair sshd on restored VMs (stale config from backup) ---
 vlog "repairing sshd config"
 lxc exec "$VM_NAME" -- bash -c '
+  # Fix main config
   sed -i "s/^#\?PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config
   sed -i "s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config
   sed -i "s/^#\?AuthenticationMethods.*/AuthenticationMethods any/" /etc/ssh/sshd_config
+  # Ubuntu 24.04 has Include directives; override via drop-in
+  mkdir -p /etc/ssh/sshd_config.d
+  cat > /etc/ssh/sshd_config.d/99-relay.conf <<SSHEOF
+PermitRootLogin yes
+PasswordAuthentication yes
+AuthenticationMethods any
+ChallengeResponseAuthentication no
+UsePAM yes
+SSHEOF
   ssh-keygen -A 2>/dev/null || true
   systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
-' 2>/dev/null || true
+  sleep 2
+  echo "sshd_repair_done: $(systemctl is-active ssh 2>/dev/null || echo unknown)"
+' 2>&1 || true
 
 # --- phase 3: sshd must be active ---
 vlog "waiting for sshd"
