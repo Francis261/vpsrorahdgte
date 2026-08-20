@@ -228,6 +228,14 @@ else
   cat /tmp/socat-ssh.log /tmp/socat-web.log 2>/dev/null || true
   fail "socat port forwards failed to start (ssh_ok=$SSH_OK web_ok=$WEB_OK)"
 fi
+# Direct test of socat -> VM:22 from the host (diagnostic for boot report)
+sleep 1
+BANNER="$(echo "" | timeout 8 nc 127.0.0.1 22 2>/dev/null || true)"
+if [ -n "$BANNER" ]; then
+  vlog "SSH banner via socat: $BANNER"
+else
+  vlog "WARN no SSH banner via socat (127.0.0.1:22) - VM sshd may not be reachable at $VM_IP:22"
+fi
 
 cat > /tmp/vm-restart.sh <<EOF
 #!/usr/bin/env bash
@@ -273,6 +281,10 @@ sleep 5
   pgrep -a cloudflared 2>&1 || echo "(cloudflared not running on host)"
   echo "--- VM password check ---"
   lxc exec "$VM_NAME" -- bash -c 'echo "Frank986532" | su -s /bin/sh -c "echo PASSWORD_OK" root' 2>&1 || echo "(password check failed)"
+  echo "--- SSH banner via socat (host -> VM:22) ---"
+  echo "" | timeout 8 nc 127.0.0.1 22 2>&1 || echo "(no banner - socat/VM:22 broken)"
+  echo "--- VM sshd effective config ---"
+  lxc exec "$VM_NAME" -- bash -c 'sshd -T 2>&1 | grep -iE "permitrootlogin|passwordauthentication|authenticationmethods" || true' 2>&1 || true
   echo "--- network (VM) ---"
   lxc exec "$VM_NAME" -- bash -c 'ip a 2>&1 | grep -E "^[0-9]+:|inet " || true; echo "-- route --"; ip r 2>&1 || true' 2>&1 || true
 } > /tmp/vm-boot-report.log 2>&1
