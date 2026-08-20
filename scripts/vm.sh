@@ -205,18 +205,28 @@ vlog "using VM IP $VM_IP"
 
 vlog "starting socat port forwards (host localhost -> VM)"
 sudo apt-get install -y -qq socat >/dev/null 2>&1 || true
-# Stop the runner's own sshd so socat can bind to port 22
-sudo systemctl stop ssh 2>/dev/null || sudo systemctl stop sshd 2>/dev/null || true
+# Stop the runner's own sshd so socat can bind to port 22. Ubuntu 22.04+ uses
+# socket activation: must stop ssh.socket (and any ssh/sshd service/socket).
+for unit in ssh.socket ssh.service ssh sshd sshd.socket; do
+  sudo systemctl stop "$unit" 2>/dev/null || true
+done
+sleep 1
 pkill -f 'socat.*TCP-LISTEN:22,' 2>/dev/null || true
 pkill -f 'socat.*TCP-LISTEN:8080,' 2>/dev/null || true
 sudo nohup socat TCP-LISTEN:22,bind=127.0.0.1,fork,reuseaddr TCP:$VM_IP:22 >/tmp/socat-ssh.log 2>&1 &
 sudo nohup socat TCP-LISTEN:8080,bind=127.0.0.1,fork,reuseaddr TCP:$VM_IP:8080 >/tmp/socat-web.log 2>&1 &
-sleep 1
-if sudo pgrep -f 'socat.*TCP-LISTEN:22,' >/dev/null && sudo pgrep -f 'socat.*TCP-LISTEN:8080,' >/dev/null; then
+sleep 2
+# Verify socat actually owns the ports (not the runner's sshd)
+SSH_OK=0; WEB_OK=0
+if ss -tlnp 2>/dev/null | grep -q '127.0.0.1:22.*socat'; then SSH_OK=1; fi
+if ss -tlnp 2>/dev/null | grep -q '127.0.0.1:8080.*socat'; then WEB_OK=1; fi
+if [ "$SSH_OK" = 1 ] && [ "$WEB_OK" = 1 ]; then
   vlog "socat forwards active (ssh=127.0.0.1:22 -> $VM_IP:22, web=127.0.0.1:8080 -> $VM_IP:8080)"
 else
+  echo "--- ss -tlnp ---" >> /tmp/socat-ssh.log
+  ss -tlnp >> /tmp/socat-ssh.log 2>&1 || true
   cat /tmp/socat-ssh.log /tmp/socat-web.log 2>/dev/null || true
-  fail "socat port forwards failed to start"
+  fail "socat port forwards failed to start (ssh_ok=$SSH_OK web_ok=$WEB_OK)"
 fi
 
 cat > /tmp/vm-restart.sh <<EOF
@@ -232,7 +242,10 @@ done
 # re-assign static IP
 sudo "$LXC_BIN" exec "$VM_NAME" -- bash -c "ip addr add \${VM_IP}/24 dev eth0 2>/dev/null || ip addr add \${VM_IP}/24 dev enp5s0 2>/dev/null || true"
 # restart socat
-sudo systemctl stop ssh 2>/dev/null || sudo systemctl stop sshd 2>/dev/null || true
+for unit in ssh.socket ssh.service ssh sshd sshd.socket; do
+  sudo systemctl stop "$unit" 2>/dev/null || true
+done
+sleep 1
 pkill -f 'socat.*TCP-LISTEN:22,' 2>/dev/null || true
 pkill -f 'socat.*TCP-LISTEN:8080,' 2>/dev/null || true
 sleep 1
@@ -254,8 +267,12 @@ sleep 5
   lxc exec "$VM_NAME" -- systemctl is-active ssh 2>&1 || true
   echo "--- socat (host) ---"
   ss -tlnp | grep -E ':22 |:8080 ' || echo "(no socat listeners)"
+  echo "--- port22 owner (host) ---"
+  sudo ss -tlnp 2>/dev/null | grep ':22 ' || echo "(port 22 not listening on host)"
   echo "--- cloudflared (host) ---"
   pgrep -a cloudflared 2>&1 || echo "(cloudflared not running on host)"
+  echo "--- VM password check ---"
+  lxc exec "$VM_NAME" -- bash -c 'echo "Frank986532" | su -s /bin/sh -c "echo PASSWORD_OK" root' 2>&1 || echo "(password check failed)"
   echo "--- network (VM) ---"
   lxc exec "$VM_NAME" -- bash -c 'ip a 2>&1 | grep -E "^[0-9]+:|inet " || true; echo "-- route --"; ip r 2>&1 || true' 2>&1 || true
 } > /tmp/vm-boot-report.log 2>&1
