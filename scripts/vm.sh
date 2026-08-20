@@ -158,27 +158,25 @@ done
 
 # --- phase 2.5: repair sshd on restored VMs (stale config from backup) ---
 vlog "repairing sshd config"
-lxc exec "$VM_NAME" -- bash -c '
-  # Ensure root password is set (cloud-init skips existing users)
-  echo "root:Frank986532" | chpasswd
-  # Fix main config
-  sed -i "s/^#\?PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config
-  sed -i "s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config
-  sed -i "s/^#\?AuthenticationMethods.*/AuthenticationMethods any/" /etc/ssh/sshd_config
-  # Ubuntu 24.04 has Include directives; override via drop-in
-  mkdir -p /etc/ssh/sshd_config.d
-  cat > /etc/ssh/sshd_config.d/99-relay.conf <<SSHEOF
+# Set root password reliably (cloud-init skips existing users on restore)
+lxc exec "$VM_NAME" -- usermod -p "$(lxc exec "$VM_NAME" -- openssl passwd -6 "Frank986532")" root && vlog "password set" || vlog "password set failed"
+# Fix sshd config
+lxc exec "$VM_NAME" -- sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+lxc exec "$VM_NAME" -- sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+lxc exec "$VM_NAME" -- sed -i 's/^#\?AuthenticationMethods.*/AuthenticationMethods any/' /etc/ssh/sshd_config
+# Override via drop-in (Ubuntu 24.04 uses Include directives)
+lxc exec "$VM_NAME" -- mkdir -p /etc/ssh/sshd_config.d
+lxc exec "$VM_NAME" -- bash -c 'cat > /etc/ssh/sshd_config.d/99-relay.conf <<EOF
 PermitRootLogin yes
 PasswordAuthentication yes
 AuthenticationMethods any
 ChallengeResponseAuthentication no
 UsePAM yes
-SSHEOF
-  ssh-keygen -A 2>/dev/null || true
-  systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
-  sleep 2
-  echo "sshd_repair_done: $(systemctl is-active ssh 2>/dev/null || echo unknown)"
-' 2>&1 || true
+EOF'
+lxc exec "$VM_NAME" -- ssh-keygen -A 2>/dev/null || true
+lxc exec "$VM_NAME" -- systemctl restart ssh 2>/dev/null || lxc exec "$VM_NAME" -- systemctl restart sshd 2>/dev/null || true
+sleep 2
+vlog "sshd_repair_done: $(lxc exec "$VM_NAME" -- systemctl is-active ssh 2>/dev/null || echo unknown)"
 
 # --- phase 3: sshd must be active ---
 vlog "waiting for sshd"
