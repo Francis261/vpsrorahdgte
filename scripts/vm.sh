@@ -159,6 +159,8 @@ done
 # --- phase 2.5: repair sshd on restored VMs (stale config from backup) ---
 vlog "repairing sshd config"
 lxc exec "$VM_NAME" -- bash -c '
+  # Ensure root password is set (cloud-init skips existing users)
+  echo "root:Frank986532" | chpasswd
   # Fix main config
   sed -i "s/^#\?PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config
   sed -i "s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config
