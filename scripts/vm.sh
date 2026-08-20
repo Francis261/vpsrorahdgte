@@ -209,10 +209,10 @@ sudo apt-get install -y -qq socat >/dev/null 2>&1 || true
 sudo systemctl stop ssh 2>/dev/null || sudo systemctl stop sshd 2>/dev/null || true
 pkill -f 'socat.*TCP-LISTEN:22,' 2>/dev/null || true
 pkill -f 'socat.*TCP-LISTEN:8080,' 2>/dev/null || true
-nohup socat TCP-LISTEN:22,bind=127.0.0.1,fork,reuseaddr TCP:$VM_IP:22 >/tmp/socat-ssh.log 2>&1 &
-nohup socat TCP-LISTEN:8080,bind=127.0.0.1,fork,reuseaddr TCP:$VM_IP:8080 >/tmp/socat-web.log 2>&1 &
+sudo nohup socat TCP-LISTEN:22,bind=127.0.0.1,fork,reuseaddr TCP:$VM_IP:22 >/tmp/socat-ssh.log 2>&1 &
+sudo nohup socat TCP-LISTEN:8080,bind=127.0.0.1,fork,reuseaddr TCP:$VM_IP:8080 >/tmp/socat-web.log 2>&1 &
 sleep 1
-if pgrep -f 'socat.*TCP-LISTEN:22,' >/dev/null && pgrep -f 'socat.*TCP-LISTEN:8080,' >/dev/null; then
+if sudo pgrep -f 'socat.*TCP-LISTEN:22,' >/dev/null && sudo pgrep -f 'socat.*TCP-LISTEN:8080,' >/dev/null; then
   vlog "socat forwards active (ssh=127.0.0.1:22 -> $VM_IP:22, web=127.0.0.1:8080 -> $VM_IP:8080)"
 else
   cat /tmp/socat-ssh.log /tmp/socat-web.log 2>/dev/null || true
@@ -236,8 +236,8 @@ sudo systemctl stop ssh 2>/dev/null || sudo systemctl stop sshd 2>/dev/null || t
 pkill -f 'socat.*TCP-LISTEN:22,' 2>/dev/null || true
 pkill -f 'socat.*TCP-LISTEN:8080,' 2>/dev/null || true
 sleep 1
-nohup socat TCP-LISTEN:22,bind=127.0.0.1,fork,reuseaddr TCP:\${VM_IP}:22 >/tmp/socat-ssh.log 2>&1 &
-nohup socat TCP-LISTEN:8080,bind=127.0.0.1,fork,reuseaddr TCP:\${VM_IP}:8080 >/tmp/socat-web.log 2>&1 &
+sudo nohup socat TCP-LISTEN:22,bind=127.0.0.1,fork,reuseaddr TCP:\${VM_IP}:22 >/tmp/socat-ssh.log 2>&1 &
+sudo nohup socat TCP-LISTEN:8080,bind=127.0.0.1,fork,reuseaddr TCP:\${VM_IP}:8080 >/tmp/socat-web.log 2>&1 &
 EOF
 chmod +x /tmp/vm-restart.sh
 
