@@ -156,15 +156,25 @@ for i in $(seq 1 120); do
   [ "$i" -eq 120 ] && fail "lxd agent never responded"
 done
 
+# --- phase 2.5: repair sshd on restored VMs (stale config from backup) ---
+vlog "repairing sshd config"
+lxc exec "$VM_NAME" -- bash -c '
+  sed -i "s/^#\?PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config
+  sed -i "s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config
+  sed -i "s/^#\?AuthenticationMethods.*/AuthenticationMethods any/" /etc/ssh/sshd_config
+  ssh-keygen -A 2>/dev/null || true
+  systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
+' 2>/dev/null || true
+
 # --- phase 3: sshd must be active ---
 vlog "waiting for sshd"
-for i in $(seq 1 180); do
+for i in $(seq 1 60); do
   if lxc exec "$VM_NAME" -- systemctl is-active ssh >/dev/null 2>&1; then
     vlog "VM sshd ready (${i} tries)"
     break
   fi
   sleep 5
-  [ "$i" -eq 180 ] && fail "VM sshd never became active"
+  [ "$i" -eq 60 ] && fail "VM sshd never became active"
 done
 
 # --- phase 4: get VM IP + assign static + start socat port forwards ---
