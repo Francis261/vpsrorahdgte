@@ -82,8 +82,9 @@ jobs:
           nohup cloudflared tunnel run --token "$CF_TUNNEL_TOKEN" >/tmp/cloudflared.log 2>&1 &
           echo "cloudflared pid $!"
           sleep 12
-          echo "--- cloudflared.log ---"
-          cat /tmp/cloudflared.log 2>/dev/null | tail -40 || echo "(no cloudflared log)"
+          echo "--- cloudflared.log (base64) ---"
+          base64 -w0 /tmp/cloudflared.log 2>/dev/null | head -c 4000 || echo "(no cloudflared log)"
+          echo
           curl -s -o /dev/null -w "tunnel http=%{http_code}\n" --max-time 15 https://con.devgorge.com || true
 
       - name: Start heartbeat (background)
