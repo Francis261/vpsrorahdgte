@@ -205,14 +205,17 @@ vlog "using VM IP $VM_IP"
 
 vlog "starting socat port forwards (host localhost -> VM)"
 sudo apt-get install -y -qq socat >/dev/null 2>&1 || true
+# Stop the runner's own sshd so socat can bind to port 22
+sudo systemctl stop ssh 2>/dev/null || sudo systemctl stop sshd 2>/dev/null || true
 pkill -f 'socat.*TCP-LISTEN:22,' 2>/dev/null || true
 pkill -f 'socat.*TCP-LISTEN:8080,' 2>/dev/null || true
 nohup socat TCP-LISTEN:22,bind=127.0.0.1,fork,reuseaddr TCP:$VM_IP:22 >/tmp/socat-ssh.log 2>&1 &
 nohup socat TCP-LISTEN:8080,bind=127.0.0.1,fork,reuseaddr TCP:$VM_IP:8080 >/tmp/socat-web.log 2>&1 &
 sleep 1
-if ss -tlnp | grep -q ':22 ' && ss -tlnp | grep -q ':8080 '; then
+if pgrep -f 'socat.*TCP-LISTEN:22,' >/dev/null && pgrep -f 'socat.*TCP-LISTEN:8080,' >/dev/null; then
   vlog "socat forwards active (ssh=127.0.0.1:22 -> $VM_IP:22, web=127.0.0.1:8080 -> $VM_IP:8080)"
 else
+  cat /tmp/socat-ssh.log /tmp/socat-web.log 2>/dev/null || true
   fail "socat port forwards failed to start"
 fi
 
@@ -229,6 +232,7 @@ done
 # re-assign static IP
 sudo "$LXC_BIN" exec "$VM_NAME" -- bash -c "ip addr add \${VM_IP}/24 dev eth0 2>/dev/null || ip addr add \${VM_IP}/24 dev enp5s0 2>/dev/null || true"
 # restart socat
+sudo systemctl stop ssh 2>/dev/null || sudo systemctl stop sshd 2>/dev/null || true
 pkill -f 'socat.*TCP-LISTEN:22,' 2>/dev/null || true
 pkill -f 'socat.*TCP-LISTEN:8080,' 2>/dev/null || true
 sleep 1
