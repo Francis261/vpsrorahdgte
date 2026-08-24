@@ -1,15 +1,12 @@
 {
-  "version": 1,
-  "containers": ["vps"],
-  "host_paths": ["/root/.bashrc", "/root/.config/opencode"],
+  "version": 2,
   "handoff_after_min": 300,
   "tunnel": {
-    "type": "cloudflare-access-token",
-    "hostname": "vps.example.com",
-    "ssh_hostname": "ssh.vps.example.com",
-    "tunnel_name": "vps",
-    "tunnel_uuid": "5cc6fb30-0880-4409-a45e-bdea6de48153",
-    "web_port": 8080,
-    "ssh_port": 22
+    "hostname": "con.devgorge.com",
+    "host_hostname": "host.devgorge.com",
+    "tunnel_uuid": "5cc6fb30-0880-4409-a45e-bdea6de48153"
+  },
+  "backup": {
+    "home_exclude": [".nvm", ".cache", "node_modules", ".npm", ".yarn", "go", ".cargo", ".rustup", ".gradle", ".m2", ".android", ".vscode-server", ".local/share/Trash"]
   }
 }

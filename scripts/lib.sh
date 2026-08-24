@@ -12,7 +12,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${LEASE_PATH:=lease.json}"
 : "${HOLD_TIMEOUT_MIN:=45}"
 : "${HEARTBEAT_INTERVAL_MIN:=5}"
-: "${KEEP_BACKUPS:=5}"
+: "${KEEP_BACKUPS:=1}"
 
 log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
@@ -22,17 +22,20 @@ now_iso()   { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 self_repo() { echo "${GITHUB_REPOSITORY:-unknown/unknown}"; }
 
-# --- mustBackup.json helpers ---
+# --- mustBackup.json helpers (v2) ---
 must_jq() { jq -r "$1" "$REPO_ROOT/mustBackup.json" 2>/dev/null || echo "$2"; }
 handoff_after_min()     { must_jq '.handoff_after_min // 300' 300; }
 tunnel_hostname()       { must_jq '.tunnel.hostname // ""' ""; }
-tunnel_ssh_hostname()   { must_jq '.tunnel.ssh_hostname // ""' ""; }
+tunnel_host_hostname()  { must_jq '.tunnel.host_hostname // ""' ""; }
 tunnel_uuid()           { must_jq '.tunnel.tunnel_uuid // ""' ""; }
-tunnel_web_port()       { must_jq '.tunnel.web_port // 8080' 8080; }
-tunnel_ssh_port()       { must_jq '.tunnel.ssh_port // 22' 22; }
+
+# Backup exclusion list — converts JSON array to newline-separated for tar --exclude
+backup_home_excludes() {
+  jq -r '.backup.home_exclude[]? // empty' "$REPO_ROOT/mustBackup.json" 2>/dev/null | \
+    while IFS= read -r pat; do [ -n "$pat" ] && echo "--exclude=$pat"; done
+}
 
 # --- chain.json ---
-# Given the current repo ("owner/repo"), return the next "owner/repo" in the chain.
 next_repo() {
   local self="$1"
   [ -f "$REPO_ROOT/chain.json" ] || die "chain.json not found"
@@ -56,7 +59,6 @@ next_repo() {
 setup_rclone() {
   : "${DRIVE_FOLDER_ID:?DRIVE_FOLDER_ID not set (secret)}"
   if [ -n "${RCLONE_DRIVE_TOKEN:-}" ]; then
-    # OAuth token for the account that owns the Drive folder (has real quota).
     cat > "$RCLONE_CONFIG" <<EOF
 [gdrive]
 type = drive
@@ -70,9 +72,6 @@ EOF
   fi
   if [ -n "${GDRIVE_SERVICE_ACCOUNT_JSON:-}" ]; then
     printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON" > "$GDRIVE_SA_FILE"
-    # Normalize the private key so it always contains real newlines,
-    # regardless of whether the secret stored literal \n or \\n escapes,
-    # and sanity-check the base64 body before rclone sees it.
     python3 - "$GDRIVE_SA_FILE" <<'PY'
 import json, re, sys
 p = sys.argv[1]
@@ -107,7 +106,6 @@ lease_read() {
 
 lease_upload() { rclone --config "$RCLONE_CONFIG" moveto "$1" "${GDRIVE_REMOTE}${LEASE_PATH}"; }
 
-# lease_write <holder> <since> <heartbeat> <next> <run_id>
 lease_write() {
   local lf=/tmp/lease-write.json
   jq -n --arg h "$1" --arg s "$2" --arg hb "$3" --arg n "$4" --arg r "$5" \
@@ -128,7 +126,6 @@ lease_age_min() {
 }
 
 lease_touch() {
-  # $1 holder, $2 run_id - refresh heartbeat, preserving since/next
   local holder="$1" run_id="${2:-}" cur since next
   cur="$(lease_read || true)"
   since="$(printf '%s' "$cur" | jq -r '.since // ""')"

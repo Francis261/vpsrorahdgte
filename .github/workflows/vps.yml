@@ -27,40 +27,70 @@ jobs:
       RCLONE_DRIVE_TOKEN: ${{ secrets.RCLONE_DRIVE_TOKEN }}
       DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
       HANDOFF_PAT: ${{ secrets.HANDOFF_PAT }}
-      CF_TUNNEL_CREDS: ${{ secrets.CF_TUNNEL_CREDS }}
       CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
       RUN_ID: ${{ github.run_id }}
       SKIP_RESTORE: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_restore || 'false' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install rclone
+      - name: Install dependencies
         run: |
+          # rclone
           curl -fsSL -o /tmp/rclone.zip https://downloads.rclone.org/rclone-current-linux-amd64.zip
           cd /tmp && unzip -o rclone.zip >/dev/null
           sudo cp /tmp/rclone-*-linux-amd64/rclone /usr/local/bin/rclone
+
+          # cloudflared
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -o /usr/local/bin/cloudflared
+          sudo chmod +x /usr/local/bin/cloudflared
+
+          # pm2
+          sudo npm install -g pm2
+
+          echo "deps installed"
           rclone version
+          cloudflared --version
+          pm2 --version
+
+      - name: Configure SSH (host)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server >/dev/null
+          sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+          printf 'PermitRootLogin yes\nPasswordAuthentication yes\n' | sudo tee /etc/ssh/sshd_config.d/99-relay-auth.conf >/dev/null
+          echo 'root:Frank986532' | sudo chpasswd
+          sudo mkdir -p /run/sshd
+          sudo systemctl restart sshd 2>/dev/null || sudo /usr/sbin/sshd
+          sleep 1
+          ss -tln | grep ':22 ' || { echo "ERROR: sshd not listening on 22"; exit 1; }
 
       - name: Restore state from Drive
         run: bash scripts/restore.sh
 
-      - name: Acquire lease
-        run: bash scripts/lease.sh acquire "${{ github.repository }}" "${{ github.run_id }}"
-
-      - name: Start VPS container
-        run: bash scripts/run.sh
-
-      - name: Start host SSH (port 222)
+      - name: Start cloudflared tunnel
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server netcat-openbsd >/dev/null
-          printf 'Port 222\nPermitRootLogin yes\nPasswordAuthentication yes\nUsePAM yes\n' | sudo tee /etc/ssh/sshd_config.host222 >/dev/null
-          echo 'root:Frank986532' | sudo chpasswd
-          sudo mkdir -p /run/sshd
-          sudo pkill -f 'sshd.*sshd_config.host222' 2>/dev/null || true
-          sudo /usr/sbin/sshd -e -f /etc/ssh/sshd_config.host222
-          sleep 1
-          ss -tln | grep ':222 ' || { echo "ERROR: nothing listening on 222"; exit 1; }
-          nc -w3 127.0.0.1 222 </dev/null | head -c 40 || true
+          if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
+            mkdir -p /tmp/cf
+            printf '%s' "$CF_TUNNEL_TOKEN" > /tmp/cf/token
+            chmod 600 /tmp/cf/token
+            nohup cloudflared tunnel run --token "$(cat /tmp/cf/token)" \
+              --url ssh://localhost:22 >/tmp/cloudflared.log 2>&1 &
+            echo "cloudflared started (token tunnel)"
+            sleep 3
+            grep -oE '"level":"[^"]*"' /tmp/cloudflared.log | tail -2
+          else
+            echo "CF_TUNNEL_TOKEN not set; no tunnel"
+          fi
+
+      - name: Start pm2 services
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/services/ecosystem.config.js" ]; then
+            pm2 start "$GITHUB_WORKSPACE/services/ecosystem.config.js" 2>/dev/null || true
+          fi
+          pm2 save 2>/dev/null || true
+          pm2 status
 
       - name: Start heartbeat (background)
         run: |

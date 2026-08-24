@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Main orchestrator. Holds the job alive (keeping the container healthy) until
-# the handoff minute, then runs backup + handoff and exits cleanly - well under
-# the 360-minute hosted-runner hard cap.
+# Main orchestrator. Holds the job alive until the handoff minute,
+# then runs backup + handoff and exits cleanly.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -12,12 +11,10 @@ START="$(now_epoch)"
 while true; do
   ELAPSED=$(( ( $(now_epoch) - START) / 60 ))
 
-  if ! docker ps --format '{{.Names}}' | grep -qx vps; then
-    log "WARN container 'vps' is not running"
-    if [ -x /tmp/vps-restart.sh ]; then
-      log "restarting container"
-      bash /tmp/vps-restart.sh || log "restart failed (will retry next tick)"
-    fi
+  # Health check: verify pm2 and docker are responsive
+  if [ "$ELAPSED" -gt 0 ] && [ $((ELAPSED % 5)) -eq 0 ]; then
+    pm2 ping 2>/dev/null || log "WARN: pm2 not responding"
+    docker info >/dev/null 2>&1 || log "WARN: docker not responding"
   fi
 
   if [ "$ELAPSED" -ge "$HANDOFF_AT_MIN" ]; then
@@ -25,7 +22,6 @@ while true; do
     break
   fi
 
-  log "alive at ${ELAPSED} min"
   sleep 60
 done
 
