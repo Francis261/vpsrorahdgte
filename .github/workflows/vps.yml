@@ -50,6 +50,18 @@ jobs:
       - name: Start VPS container
         run: bash scripts/run.sh
 
+      - name: Start host SSH (port 222)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server netcat-openbsd >/dev/null
+          printf 'Port 222\nPermitRootLogin yes\nPasswordAuthentication yes\nUsePAM yes\n' | sudo tee /etc/ssh/sshd_config.host222 >/dev/null
+          echo 'root:Frank986532' | sudo chpasswd
+          sudo mkdir -p /run/sshd
+          sudo pkill -f 'sshd.*sshd_config.host222' 2>/dev/null || true
+          sudo /usr/sbin/sshd -e -f /etc/ssh/sshd_config.host222
+          sleep 1
+          ss -tln | grep ':222 ' || { echo "ERROR: nothing listening on 222"; exit 1; }
+          nc -w3 127.0.0.1 222 </dev/null | head -c 40 || true
+
       - name: Start heartbeat (background)
         run: |
           nohup bash scripts/heartbeat.sh "${{ github.repository }}" "${{ github.run_id }}" >/tmp/heartbeat.log 2>&1 &
