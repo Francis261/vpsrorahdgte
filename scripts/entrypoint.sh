@@ -3,6 +3,10 @@
 set -e
 
 if [ -f /etc/ssh/sshd_config ]; then
+  # Restored images may predate password auth being enabled; force it on.
+  sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/; s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' \
+    /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null || true
+  printf 'PermitRootLogin yes\nPasswordAuthentication yes\n' > /etc/ssh/sshd_config.d/99-relay-auth.conf 2>/dev/null || true
   echo 'root:Frank986532' | chpasswd
   /usr/sbin/sshd
   echo "[entrypoint] sshd started (root password auth enabled)"
