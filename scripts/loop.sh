@@ -8,16 +8,15 @@ source "$(dirname "$0")/lib.sh"
 HANDOFF_AT_MIN="$(handoff_after_min)"
 log "VPS loop active; handoff scheduled at ${HANDOFF_AT_MIN} min"
 START="$(now_epoch)"
-VM_NAME="$(must_jq '.vm.name // "vps"' vps)"
 
 while true; do
   ELAPSED=$(( ( $(now_epoch) - START) / 60 ))
 
-  if ! lxc info "$VM_NAME" 2>/dev/null | grep -q 'Status: Running'; then
-    log "WARN VM '$VM_NAME' is not running"
-    if [ -x /tmp/vm-restart.sh ]; then
-      log "restarting VM"
-      bash /tmp/vm-restart.sh || log "restart failed (will retry next tick)"
+  if ! docker ps --format '{{.Names}}' | grep -qx vps; then
+    log "WARN container 'vps' is not running"
+    if [ -x /tmp/vps-restart.sh ]; then
+      log "restarting container"
+      bash /tmp/vps-restart.sh || log "restart failed (will retry next tick)"
     fi
   fi
 

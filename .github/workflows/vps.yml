@@ -41,51 +41,14 @@ jobs:
           sudo cp /tmp/rclone-*-linux-amd64/rclone /usr/local/bin/rclone
           rclone version
 
-      - name: Enable KVM and install LXD
-        run: |
-          sudo chmod 666 /dev/kvm 2>/dev/null || true
-          sudo snap install lxd
-          sudo lxd init --minimal
-          export PATH="$PATH:/snap/bin"
-          # dir storage (lxd init --minimal default) cannot host VMs: create a
-          # dedicated VM-capable pool (btrfs on a loop file).
-          sudo lxc storage create vmpool btrfs size=12GiB \
-            || sudo lxc storage create vmpool zfs size=12GiB
-          # lxd init --minimal may not leave a NAT'd bridge; ensure one exists
-          # and the default profile uses it (the VM has no outbound net without
-          # this, so cloudflared can never reach Cloudflare).
-          if ! sudo lxc network show lxdbr0 >/dev/null 2>&1; then
-            sudo lxc network create lxdbr0 ipv4.address=10.10.0.1/24 \
-              ipv4.nat=true ipv4.dhcp=true ipv6.address=none
-          fi
-          sudo lxc network set lxdbr0 ipv4.nat=true ipv4.dhcp=true
-          sudo lxc profile device set default eth0 network=lxdbr0
-          sudo sysctl -w net.ipv4.ip_forward=1 >/dev/null
-          sudo lxc network show lxdbr0
-          sudo lxc profile show default
-          lxc version
-
       - name: Restore state from Drive
         run: bash scripts/restore.sh
 
       - name: Acquire lease
         run: bash scripts/lease.sh acquire "${{ github.repository }}" "${{ github.run_id }}"
 
-      - name: Start VPS VM (LXD)
-        run: bash scripts/vm.sh
-
-      - name: Start cloudflared tunnel (host)
-        run: |
-          curl -fsSL -o /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
-          chmod 755 /usr/local/bin/cloudflared
-          echo "$CF_TUNNEL_TOKEN" > /tmp/cf-tunnel-token
-          nohup cloudflared tunnel run --token "$CF_TUNNEL_TOKEN" >/tmp/cloudflared.log 2>&1 &
-          echo "cloudflared pid $!"
-          sleep 12
-          echo "--- cloudflared.log (base64) ---"
-          base64 -w0 /tmp/cloudflared.log 2>/dev/null | head -c 4000 || echo "(no cloudflared log)"
-          echo
-          curl -s -o /dev/null -w "tunnel http=%{http_code}\n" --max-time 15 https://con.devgorge.com || true
+      - name: Start VPS container
+        run: bash scripts/run.sh
 
       - name: Start heartbeat (background)
         run: |
