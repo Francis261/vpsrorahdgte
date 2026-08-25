@@ -49,9 +49,7 @@ else
 fi
 
 # ── 4. Home directory (excluding large dirs) ────────────────────────
-mapfile -t EXCLUDES < <(backup_home_excludes)
 log "backing up home directory"
-# Always include these important paths
 tar -czf "$STAGE/home/home.tar.gz" \
   -C "$HOME" \
   --exclude='.nvm' --exclude='.cache' --exclude='node_modules' \
@@ -59,9 +57,8 @@ tar -czf "$STAGE/home/home.tar.gz" \
   --exclude='.cargo' --exclude='.rustup' --exclude='.gradle' \
   --exclude='.m2' --exclude='.android' --exclude='.vscode-server' \
   --exclude='.local/share/Trash' \
-  .bashrc .profile .bash_profile .gitconfig \
-  .pm2 .local .config .ssh 2>/dev/null || true
-log "home directory saved"
+  . 2>/dev/null || true
+log "home directory saved ($(du -sh "$STAGE/home/home.tar.gz" | cut -f1))"
 
 # ── 5. Metadata ──────────────────────────────────────────────────────
 jq -n \
