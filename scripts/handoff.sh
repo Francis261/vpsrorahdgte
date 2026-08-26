@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Hand off to the next account in the chain: update the lease, then fire a
 # repository_dispatch event so the next repo's vps.yml starts and restores.
-set -euo pipefail
+set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 setup_rclone

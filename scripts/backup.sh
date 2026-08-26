@@ -101,6 +101,6 @@ log "uploaded $ARTIFACT"
 rclone --config "$RCLONE_CONFIG" lsf "${BACKUP_REMOTE}" 2>/dev/null | grep -v '^host-backup.tar.gz$' | \
   grep '\.tar\.gz$' | while read -r f; do
     [ -n "$f" ] && rclone --config "$RCLONE_CONFIG" delete "${BACKUP_REMOTE}$f" && log "pruned old format: $f"
-  done
+  done || true
 
 log "backup complete"
