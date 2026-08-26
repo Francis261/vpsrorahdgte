@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Restore host state from Drive backup: Docker images + volumes + home + pm2.
 # Exits 0 quietly when there is no backup yet (fresh start) or skip requested.
-set -euo pipefail
+set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 setup_rclone
@@ -15,6 +15,7 @@ STAGE=/tmp/restore
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 
 # Find newest backup
+log "looking for backup on Drive..."
 latest="$(rclone --config "$RCLONE_CONFIG" lsf "${BACKUP_REMOTE}" 2>/dev/null | grep '^host-backup\.tar\.gz$' | head -1 || true)"
 if [ -z "$latest" ]; then
   log "no backup on Drive; starting fresh"
@@ -22,43 +23,56 @@ if [ -z "$latest" ]; then
 fi
 
 log "restoring backup: $latest"
-rclone --config "$RCLONE_CONFIG" copy "${BACKUP_REMOTE}${latest}" "$STAGE/"
+rclone --config "$RCLONE_CONFIG" copy "${BACKUP_REMOTE}${latest}" "$STAGE/" || {
+  log "ERROR: failed to download backup from Drive"
+  exit 1
+}
+
+ls -lh "$STAGE/$latest"
 
 # Extract the outer tarball
-tar -xzf "$STAGE/$latest" -C "$STAGE" 2>/dev/null || true
+log "extracting backup..."
+tar -xzf "$STAGE/$latest" -C "$STAGE" || {
+  log "ERROR: failed to extract backup tarball"
+  exit 1
+}
+
+log "contents of extracted backup:"
+ls -la "$STAGE/"
 
 # ── 1. Docker images ────────────────────────────────────────────────
-if [ -d "$STAGE/images" ]; then
+if [ -d "$STAGE/images" ] && [ "$(ls -A "$STAGE/images/" 2>/dev/null)" ]; then
   IMG_COUNT=0
   for img in "$STAGE"/images/*.tar.gz; do
     [ -f "$img" ] || continue
     log "loading image: $(basename "$img")"
-    gunzip -c "$img" | docker load 2>/dev/null && IMG_COUNT=$((IMG_COUNT+1))
+    gunzip -c "$img" | docker load && IMG_COUNT=$((IMG_COUNT+1)) || log "WARN: load $(basename "$img") failed"
   done
   log "loaded $IMG_COUNT docker images"
+else
+  log "no docker images in backup"
 fi
 
 # ── 2. Docker volumes ───────────────────────────────────────────────
+VOL_COUNT=0
 for vol_tar in "$STAGE"/vol-*.tar.gz; do
   [ -f "$vol_tar" ] || continue
   vol_name="$(basename "$vol_tar" .tar.gz | sed 's/^vol-//')"
   log "restoring volume: $vol_name"
   docker volume create "$vol_name" 2>/dev/null || true
   docker run --rm -v "$vol_name":/data -v "$STAGE":/backup alpine \
-    tar xzf "/backup/$(basename "$vol_tar")" -C / 2>/dev/null || log "WARN: volume $vol_name restore failed"
+    tar xzf "/backup/$(basename "$vol_tar")" -C / && VOL_COUNT=$((VOL_COUNT+1)) || log "WARN: volume $vol_name restore failed"
 done
+log "restored $VOL_COUNT docker volumes"
 
 # ── 3. Docker containers (start any that now have images) ───────────
-# Containers were committed during backup; after docker load they exist
-# as images. We recreate them from metadata if available, or just start
-# existing ones.
 if [ -f "$STAGE/meta.json" ]; then
   CONTAINERS="$(jq -r '.containers // ""' "$STAGE/meta.json" 2>/dev/null)"
   for c in $CONTAINERS; do
     [ -z "$c" ] && continue
     if docker ps -a --format '{{.Names}}' | grep -qx "$c"; then
       log "starting container: $c"
-      docker start "$c" 2>/dev/null || log "WARN: start $c failed"
+      docker start "$c" || log "WARN: start $c failed"
     else
       log "WARN: container $c not found (image may need manual recreate)"
     fi
@@ -67,8 +81,13 @@ fi
 
 # ── 4. Home directory ──────────────────────────────────────────────
 if [ -f "$STAGE/home/home.tar.gz" ]; then
-  log "restoring home directory"
-  sudo tar -xzf "$STAGE/home/home.tar.gz" -C "$HOME" 2>/dev/null || true
+  log "restoring home directory from $(du -h "$STAGE/home/home.tar.gz" | cut -f1) archive"
+  sudo tar -xzf "$STAGE/home/home.tar.gz" -C "$HOME" || {
+    log "ERROR: home directory restore failed"
+  }
+  log "home directory restored"
+else
+  log "WARN: no home.tar.gz in backup"
 fi
 
 # ── 5. PM2 processes ────────────────────────────────────────────────
@@ -100,6 +119,8 @@ PY
     pm2 resurrect 2>/dev/null || true
     log "pm2 processes restored"
   fi
+else
+  log "no pm2 dump in backup"
 fi
 
 # ── 6. Set root password ────────────────────────────────────────────

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Main orchestrator. Holds the job alive until the handoff minute,
 # then runs backup + handoff and exits cleanly.
-set -euo pipefail
+# NOTE: No set -e — backup/handoff failures should log, not kill the VPS.
+set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 HANDOFF_AT_MIN="$(handoff_after_min)"
@@ -26,7 +27,17 @@ while true; do
 done
 
 log "running backup"
-bash "$REPO_ROOT/scripts/backup.sh"
+if bash "$REPO_ROOT/scripts/backup.sh"; then
+  log "backup succeeded"
+else
+  log "WARN: backup failed (exit code $?)"
+fi
+
 log "running handoff"
-bash "$REPO_ROOT/scripts/handoff.sh"
+if bash "$REPO_ROOT/scripts/handoff.sh"; then
+  log "handoff succeeded"
+else
+  log "WARN: handoff failed (exit code $?)"
+fi
+
 log "cycle complete; exiting cleanly"
