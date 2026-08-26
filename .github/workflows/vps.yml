@@ -76,7 +76,7 @@ jobs:
             printf '%s' "$CF_TUNNEL_TOKEN" > /tmp/cf/token
             chmod 600 /tmp/cf/token
             nohup cloudflared tunnel run --token "$(cat /tmp/cf/token)" \
-              --url ssh://localhost:22 >/tmp/cloudflared.log 2>&1 &
+              >/tmp/cloudflared.log 2>&1 &
             echo "cloudflared started (token tunnel)"
             sleep 3
             grep -oE '"level":"[^"]*"' /tmp/cloudflared.log | tail -2
