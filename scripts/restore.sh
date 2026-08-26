@@ -79,20 +79,21 @@ if [ -f "$STAGE/meta.json" ]; then
   done
 fi
 
-# ── 4. Home directory ──────────────────────────────────────────────
+# ── 4. Root home directory (SSH logs in as root) ────────────────────
+ROOT_HOME="/root"
 if [ -f "$STAGE/home/home.tar.gz" ]; then
-  log "restoring home directory from $(du -h "$STAGE/home/home.tar.gz" | cut -f1) archive"
-  sudo tar -xzf "$STAGE/home/home.tar.gz" -C "$HOME" || {
+  log "restoring home directory to $ROOT_HOME from $(du -h "$STAGE/home/home.tar.gz" | cut -f1) archive"
+  sudo tar -xzf "$STAGE/home/home.tar.gz" -C "$ROOT_HOME" || {
     log "ERROR: home directory restore failed"
   }
-  log "home directory restored"
+  log "home directory restored to $ROOT_HOME"
 else
   log "WARN: no home.tar.gz in backup"
 fi
 
 # ── 5. PM2 processes ────────────────────────────────────────────────
 if [ -f "$STAGE/pm2-dump" ]; then
-  mkdir -p "$HOME/.pm2"
+  mkdir -p "$ROOT_HOME/.pm2"
   # Fix script paths from old workspace to current workspace
   WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}"
   if [ -n "$WORKSPACE" ]; then
@@ -114,7 +115,7 @@ except Exception as e:
     print(f"WARN: pm2 path fix failed: {e}", file=sys.stderr)
 PY
   fi
-  cp "$STAGE/pm2-dump" "$HOME/.pm2/dump.pm2"
+  cp "$STAGE/pm2-dump" "$ROOT_HOME/.pm2/dump.pm2"
   if command -v pm2 &>/dev/null; then
     pm2 resurrect 2>/dev/null || true
     log "pm2 processes restored"

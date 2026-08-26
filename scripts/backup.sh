@@ -13,7 +13,7 @@ rm -rf "$STAGE" && mkdir -p "$STAGE/images" "$STAGE/home"
 # ── 1. PM2 process list ──────────────────────────────────────────────
 if command -v pm2 &>/dev/null; then
   pm2 save 2>/dev/null || true
-  PM2_DUMP="$HOME/.pm2/dump.pm2"
+  PM2_DUMP="/root/.pm2/dump.pm2"
   if [ -f "$PM2_DUMP" ]; then
     cp "$PM2_DUMP" "$STAGE/pm2-dump"
     log "pm2 process list saved"
@@ -50,10 +50,11 @@ else
   log "no docker volumes directory"
 fi
 
-# ── 4. Home directory (excluding large dirs) ────────────────────────
-log "backing up home directory"
+# ── 4. Root home directory (SSH logs in as root, not runner) ────────
+ROOT_HOME="/root"
+log "backing up root home directory from $ROOT_HOME"
 tar -czf "$STAGE/home/home.tar.gz" \
-  -C "$HOME" \
+  -C "$ROOT_HOME" \
   --exclude='.nvm' --exclude='.cache' --exclude='node_modules' \
   --exclude='.npm' --exclude='.yarn' --exclude='go' \
   --exclude='.cargo' --exclude='.rustup' --exclude='.gradle' \
