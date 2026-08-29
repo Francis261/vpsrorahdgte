@@ -76,9 +76,12 @@ jobs:
           echo "Disk before cleanup:"
           df -h / | tail -1
           # Remove pre-installed stuff we don't need (keep Android SDK)
-          sudo rm -rf /opt/ghc /usr/local/.ghcup \
+          sudo rm -rf /opt/hostedtoolcache /opt/ghc /usr/local/.ghcup \
             /usr/share/dotnet /usr/local/share/powershell /usr/local/share/chromium \
-            /usr/local/share/firefox 2>/dev/null || true
+            /usr/local/share/firefox /snap /usr/local/share/vcpkg \
+            /usr/local/share/miniconda /usr/local/share/pnpm \
+            /usr/local/lib/node_modules /usr/share/swift \
+            /usr/local/julia* 2>/dev/null || true
           sudo apt-get clean 2>/dev/null || true
           sudo rm -rf /var/lib/apt/lists/* /var/tmp/* 2>/dev/null || true
           docker system prune -af 2>/dev/null || true
