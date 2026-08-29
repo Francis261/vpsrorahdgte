@@ -88,6 +88,13 @@ jobs:
       - name: Restore state from Drive
         run: bash scripts/restore.sh
 
+      - name: Free disk after restore
+        run: |
+          sudo rm -rf /var/tmp/* /tmp/restore 2>/dev/null || true
+          docker system prune -af 2>/dev/null || true
+          echo "Disk after post-restore cleanup:"
+          df -h / | tail -1
+
       - name: Start cloudflared tunnel
         run: |
           if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
