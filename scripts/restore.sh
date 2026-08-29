@@ -41,42 +41,46 @@ log "contents of extracted backup:"
 ls -la "$STAGE/"
 
 # ── 1. Docker images ────────────────────────────────────────────────
-if [ -d "$STAGE/images" ] && [ "$(ls -A "$STAGE/images/" 2>/dev/null)" ]; then
-  IMG_COUNT=0
-  for img in "$STAGE"/images/*.tar.gz; do
-    [ -f "$img" ] || continue
-    log "loading image: $(basename "$img")"
-    gunzip -c "$img" | docker load && IMG_COUNT=$((IMG_COUNT+1)) || log "WARN: load $(basename "$img") failed"
-  done
-  log "loaded $IMG_COUNT docker images"
+if [ "${SKIP_DOCKER:-false}" = "true" ]; then
+  log "SKIP_DOCKER=true; skipping Docker restore"
 else
-  log "no docker images in backup"
-fi
+  if [ -d "$STAGE/images" ] && [ "$(ls -A "$STAGE/images/" 2>/dev/null)" ]; then
+    IMG_COUNT=0
+    for img in "$STAGE"/images/*.tar.gz; do
+      [ -f "$img" ] || continue
+      log "loading image: $(basename "$img")"
+      gunzip -c "$img" | docker load && IMG_COUNT=$((IMG_COUNT+1)) || log "WARN: load $(basename "$img") failed"
+    done
+    log "loaded $IMG_COUNT docker images"
+  else
+    log "no docker images in backup"
+  fi
 
-# ── 2. Docker volumes ───────────────────────────────────────────────
-VOL_COUNT=0
-for vol_tar in "$STAGE"/vol-*.tar.gz; do
-  [ -f "$vol_tar" ] || continue
-  vol_name="$(basename "$vol_tar" .tar.gz | sed 's/^vol-//')"
-  log "restoring volume: $vol_name"
-  docker volume create "$vol_name" 2>/dev/null || true
-  docker run --rm -v "$vol_name":/data -v "$STAGE":/backup alpine \
-    tar xzf "/backup/$(basename "$vol_tar")" -C / && VOL_COUNT=$((VOL_COUNT+1)) || log "WARN: volume $vol_name restore failed"
-done
-log "restored $VOL_COUNT docker volumes"
-
-# ── 3. Docker containers (start any that now have images) ───────────
-if [ -f "$STAGE/meta.json" ]; then
-  CONTAINERS="$(jq -r '.containers // ""' "$STAGE/meta.json" 2>/dev/null)"
-  for c in $CONTAINERS; do
-    [ -z "$c" ] && continue
-    if docker ps -a --format '{{.Names}}' | grep -qx "$c"; then
-      log "starting container: $c"
-      docker start "$c" || log "WARN: start $c failed"
-    else
-      log "WARN: container $c not found (image may need manual recreate)"
-    fi
+  # ── 2. Docker volumes ───────────────────────────────────────────────
+  VOL_COUNT=0
+  for vol_tar in "$STAGE"/vol-*.tar.gz; do
+    [ -f "$vol_tar" ] || continue
+    vol_name="$(basename "$vol_tar" .tar.gz | sed 's/^vol-//')"
+    log "restoring volume: $vol_name"
+    docker volume create "$vol_name" 2>/dev/null || true
+    docker run --rm -v "$vol_name":/data -v "$STAGE":/backup alpine \
+      tar xzf "/backup/$(basename "$vol_tar")" -C / && VOL_COUNT=$((VOL_COUNT+1)) || log "WARN: volume $vol_name restore failed"
   done
+  log "restored $VOL_COUNT docker volumes"
+
+  # ── 3. Docker containers (start any that now have images) ───────────
+  if [ -f "$STAGE/meta.json" ]; then
+    CONTAINERS="$(jq -r '.containers // ""' "$STAGE/meta.json" 2>/dev/null)"
+    for c in $CONTAINERS; do
+      [ -z "$c" ] && continue
+      if docker ps -a --format '{{.Names}}' | grep -qx "$c"; then
+        log "starting container: $c"
+        docker start "$c" || log "WARN: start $c failed"
+      else
+        log "WARN: container $c not found (image may need manual recreate)"
+      fi
+    done
+  fi
 fi
 
 # ── 4. Root home directory (SSH logs in as root) ────────────────────

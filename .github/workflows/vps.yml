@@ -7,6 +7,10 @@ on:
         description: 'Start fresh without restoring from Drive'
         type: boolean
         default: false
+      skip_docker:
+        description: 'Skip Docker backup/restore (saves disk space)'
+        type: boolean
+        default: false
   repository_dispatch:
     types: [handoff]
 
@@ -30,6 +34,7 @@ jobs:
       CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
       RUN_ID: ${{ github.run_id }}
       SKIP_RESTORE: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_restore || 'false' }}
+      SKIP_DOCKER: ${{ (github.event_name == 'workflow_dispatch' && inputs.skip_docker) || vars.SKIP_DOCKER || 'false' }}
     steps:
       - uses: actions/checkout@v4
 
