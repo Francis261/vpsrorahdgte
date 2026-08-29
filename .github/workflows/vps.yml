@@ -38,19 +38,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Free disk space
+        run: |
+          echo "Disk before cleanup:"
+          df -h / | tail -1
+          sudo rm -rf /opt/hostedtoolcache /opt/ghc /usr/local/.ghcup \
+            /usr/share/dotnet /usr/local/share/powershell /usr/local/share/chromium \
+            /usr/local/share/firefox /snap /usr/local/share/vcpkg \
+            /usr/local/share/miniconda /usr/local/share/pnpm \
+            /usr/share/swift \
+            /usr/local/julia* 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          sudo rm -rf /var/lib/apt/lists/* /var/tmp/* 2>/dev/null || true
+          docker system prune -af 2>/dev/null || true
+          echo "Disk after cleanup:"
+          df -h / | tail -1
+
       - name: Install dependencies
         run: |
-          # rclone
           curl -fsSL -o /tmp/rclone.zip https://downloads.rclone.org/rclone-current-linux-amd64.zip
           cd /tmp && unzip -o rclone.zip >/dev/null
           sudo cp /tmp/rclone-*-linux-amd64/rclone /usr/local/bin/rclone
 
-          # cloudflared
           curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
             -o /usr/local/bin/cloudflared
           sudo chmod +x /usr/local/bin/cloudflared
 
-          # pm2
           sudo npm install -g pm2
 
           echo "deps installed"
@@ -70,23 +83,6 @@ jobs:
           sudo systemctl restart sshd 2>/dev/null || sudo /usr/sbin/sshd
           sleep 1
           ss -tln | grep ':22 ' || { echo "ERROR: sshd not listening on 22"; exit 1; }
-
-      - name: Free disk space
-        run: |
-          echo "Disk before cleanup:"
-          df -h / | tail -1
-          # Remove pre-installed stuff we don't need (keep Android SDK)
-          sudo rm -rf /opt/hostedtoolcache /opt/ghc /usr/local/.ghcup \
-            /usr/share/dotnet /usr/local/share/powershell /usr/local/share/chromium \
-            /usr/local/share/firefox /snap /usr/local/share/vcpkg \
-            /usr/local/share/miniconda /usr/local/share/pnpm \
-            /usr/local/lib/node_modules /usr/share/swift \
-            /usr/local/julia* 2>/dev/null || true
-          sudo apt-get clean 2>/dev/null || true
-          sudo rm -rf /var/lib/apt/lists/* /var/tmp/* 2>/dev/null || true
-          docker system prune -af 2>/dev/null || true
-          echo "Disk after cleanup:"
-          df -h / | tail -1
 
       - name: Restore state from Drive
         run: bash scripts/restore.sh
