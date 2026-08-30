@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Restore host state from Drive backup: Docker images + volumes + home + pm2.
+# Restore host state from Drive backup: home + Docker + pm2.
 # Exits 0 quietly when there is no backup yet (fresh start) or skip requested.
 set -uo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -40,7 +40,19 @@ tar -xzf "$STAGE/$latest" -C "$STAGE" || {
 log "contents of extracted backup:"
 ls -la "$STAGE/"
 
-# ── 1. Docker images ────────────────────────────────────────────────
+# ── 1. Root home directory (restore FIRST — Docker/PM2 may need these files)
+ROOT_HOME="/root"
+if [ -f "$STAGE/home/home.tar.gz" ]; then
+  log "restoring home directory to $ROOT_HOME from $(du -h "$STAGE/home/home.tar.gz" | cut -f1) archive"
+  sudo tar -xzf "$STAGE/home/home.tar.gz" -C "$ROOT_HOME" || {
+    log "ERROR: home directory restore failed"
+  }
+  log "home directory restored to $ROOT_HOME"
+else
+  log "WARN: no home.tar.gz in backup"
+fi
+
+# ── 2. Docker images ────────────────────────────────────────────────
 if [ "${SKIP_DOCKER:-false}" = "true" ]; then
   log "SKIP_DOCKER=true; skipping Docker restore"
 else
@@ -56,7 +68,7 @@ else
     log "no docker images in backup"
   fi
 
-  # ── 2. Docker volumes ───────────────────────────────────────────────
+  # ── 3. Docker volumes ───────────────────────────────────────────────
   VOL_COUNT=0
   for vol_tar in "$STAGE"/vol-*.tar.gz; do
     [ -f "$vol_tar" ] || continue
@@ -68,7 +80,7 @@ else
   done
   log "restored $VOL_COUNT docker volumes"
 
-  # ── 3. Docker containers (start any that now have images) ───────────
+  # ── 4. Docker containers (start any that now have images) ───────────
   if [ -f "$STAGE/meta.json" ]; then
     CONTAINERS="$(jq -r '.containers // ""' "$STAGE/meta.json" 2>/dev/null)"
     for c in $CONTAINERS; do
@@ -83,22 +95,9 @@ else
   fi
 fi
 
-# ── 4. Root home directory (SSH logs in as root) ────────────────────
-ROOT_HOME="/root"
-if [ -f "$STAGE/home/home.tar.gz" ]; then
-  log "restoring home directory to $ROOT_HOME from $(du -h "$STAGE/home/home.tar.gz" | cut -f1) archive"
-  sudo tar -xzf "$STAGE/home/home.tar.gz" -C "$ROOT_HOME" || {
-    log "ERROR: home directory restore failed"
-  }
-  log "home directory restored to $ROOT_HOME"
-else
-  log "WARN: no home.tar.gz in backup"
-fi
-
 # ── 5. PM2 processes ────────────────────────────────────────────────
 if [ -f "$STAGE/pm2-dump" ]; then
   mkdir -p "$ROOT_HOME/.pm2"
-  # Fix script paths from old workspace to current workspace
   WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}"
   if [ -n "$WORKSPACE" ]; then
     python3 - "$STAGE/pm2-dump" "$WORKSPACE" <<'PY'
