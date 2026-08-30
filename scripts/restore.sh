@@ -80,7 +80,7 @@ else
   done
   log "restored $VOL_COUNT docker volumes"
 
-  # ── 4. Docker containers (start any that now have images) ───────────
+  # ── 4. Docker containers (start or recreate from images) ───────────
   if [ -f "$STAGE/meta.json" ]; then
     CONTAINERS="$(jq -r '.containers // ""' "$STAGE/meta.json" 2>/dev/null)"
     for c in $CONTAINERS; do
@@ -89,7 +89,14 @@ else
         log "starting container: $c"
         docker start "$c" || log "WARN: start $c failed"
       else
-        log "WARN: container $c not found (image may need manual recreate)"
+        # Container doesn't exist — recreate from backup image
+        IMAGE="backup-${c}"
+        if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+          log "recreating container: $c from image $IMAGE"
+          docker run -d --name "$c" "$IMAGE" || log "WARN: recreate $c failed"
+        else
+          log "WARN: container $c and image $IMAGE not found"
+        fi
       fi
     done
   fi
