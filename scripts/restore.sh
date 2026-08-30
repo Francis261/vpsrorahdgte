@@ -97,7 +97,6 @@ fi
 
 # ── 5. PM2 processes ────────────────────────────────────────────────
 if [ -f "$STAGE/pm2-dump" ]; then
-  mkdir -p "$ROOT_HOME/.pm2"
   WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}"
   if [ -n "$WORKSPACE" ]; then
     python3 - "$STAGE/pm2-dump" "$WORKSPACE" <<'PY'
@@ -118,10 +117,18 @@ except Exception as e:
     print(f"WARN: pm2 path fix failed: {e}", file=sys.stderr)
 PY
   fi
-  cp "$STAGE/pm2-dump" "$ROOT_HOME/.pm2/dump.pm2"
+  # Restore dump to all possible pm2 home locations
+  for pm_dir in "$HOME/.pm2" "/root/.pm2" "/home/runner/.pm2"; do
+    if [ -d "$pm_dir" ] || [ "$pm_dir" = "/root/.pm2" ]; then
+      mkdir -p "$pm_dir"
+      cp "$STAGE/pm2-dump" "$pm_dir/dump.pm2"
+      log "pm2 dump restored to $pm_dir/dump.pm2"
+    fi
+  done
   if command -v pm2 &>/dev/null; then
     pm2 resurrect 2>/dev/null || true
-    log "pm2 processes restored"
+    log "pm2 processes resurrected"
+    pm2 list 2>/dev/null || true
   fi
 else
   log "no pm2 dump in backup"
