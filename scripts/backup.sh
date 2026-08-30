@@ -35,13 +35,20 @@ except: print('')
   fi
 fi
 
-# ── 2. Docker images (commit running containers, then save) ──────────
+# ── 2. Docker images + container configs ─────────────────────────────
 if [ "${SKIP_DOCKER:-false}" = "true" ]; then
   log "SKIP_DOCKER=true; skipping Docker backup"
   RUNNING_CONTAINERS=""
 else
   RUNNING_CONTAINERS="$(docker ps --format '{{.Names}}' 2>/dev/null || true)"
   if [ -n "$RUNNING_CONTAINERS" ]; then
+    # Save full container configs
+    mkdir -p "$STAGE/containers"
+    for c in $RUNNING_CONTAINERS; do
+      log "saving config: $c"
+      docker inspect "$c" > "$STAGE/containers/${c}.json" 2>/dev/null || true
+    done
+
     for c in $RUNNING_CONTAINERS; do
       IMAGE_TAG="backup-${c}"
       log "committing container $c → $IMAGE_TAG"
@@ -106,6 +113,7 @@ log "creating $ARTIFACT"
 # Build the list of things to include
 TAR_INCLUDES="meta.json"
 [ -d "$STAGE/images" ] && [ "$(ls -A "$STAGE/images/" 2>/dev/null)" ] && TAR_INCLUDES="$TAR_INCLUDES images/"
+[ -d "$STAGE/containers" ] && [ "$(ls -A "$STAGE/containers/" 2>/dev/null)" ] && TAR_INCLUDES="$TAR_INCLUDES containers/"
 [ -f "$STAGE/home/home.tar.gz" ] && TAR_INCLUDES="$TAR_INCLUDES home/"
 [ -f "$STAGE/pm2-dump" ] && TAR_INCLUDES="$TAR_INCLUDES pm2-dump"
 # shellcheck disable=SC2086

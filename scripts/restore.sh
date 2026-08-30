@@ -80,23 +80,79 @@ else
   done
   log "restored $VOL_COUNT docker volumes"
 
-  # ── 4. Docker containers (start or recreate from images) ───────────
-  if [ -f "$STAGE/meta.json" ]; then
-    CONTAINERS="$(jq -r '.containers // ""' "$STAGE/meta.json" 2>/dev/null)"
-    for c in $CONTAINERS; do
-      [ -z "$c" ] && continue
+  # ── 4. Docker containers (recreate from saved configs) ──────────────
+  if [ -d "$STAGE/containers" ]; then
+    for cfg in "$STAGE"/containers/*.json; do
+      [ -f "$cfg" ] || continue
+      c="$(basename "$cfg" .json)"
+      IMAGE="backup-${c}"
+
       if docker ps -a --format '{{.Names}}' | grep -qx "$c"; then
-        log "starting container: $c"
+        log "starting existing container: $c"
         docker start "$c" || log "WARN: start $c failed"
+      elif docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        log "recreating container: $c from config"
+        # Extract config and recreate with original settings
+        python3 - "$cfg" "$IMAGE" <<'PY'
+import json, sys, subprocess
+
+cfg_file, image = sys.argv[1], sys.argv[2]
+config = json.load(open(cfg_file))[0]
+
+name = config["Name"].lstrip("/")
+host_config = config.get("HostConfig", {})
+
+cmd = ["docker", "run", "-d", "--name", name]
+
+# Port bindings
+for port, bindings in (host_config.get("PortBindings") or {}).items():
+    for b in (bindings or []):
+        host_ip = b.get("HostIp", "")
+        host_port = b.get("HostPort", "")
+        if host_port:
+            cmd += ["-p", f"{host_ip}:{host_port}:{port}"]
+
+# Volume bindings
+for vol in (host_config.get("Binds") or []):
+    cmd += ["-v", vol]
+
+# Environment variables
+for env in (config.get("Config", {}).get("Env") or []):
+    cmd += ["-e", env]
+
+# Restart policy
+restart = host_config.get("RestartPolicy", {})
+if restart.get("Name") and restart["Name"] != "no":
+    cmd += ["--restart", restart["Name"]]
+
+# Network mode
+net = host_config.get("NetworkMode", "")
+if net and net != "default":
+    cmd += ["--network", net]
+
+# Extra hosts
+for h in (host_config.get("ExtraHosts") or []):
+    cmd += ["--add-host", h]
+
+# Entrypoint and CMD
+entrypoint = config.get("Config", {}).get("Entrypoint")
+cmdline = config.get("Config", {}).get("Cmd")
+if entrypoint:
+    cmd += ["--entrypoint", entrypoint[0] if isinstance(entrypoint, list) else entrypoint]
+
+cmd.append(image)
+if cmdline:
+    cmd += cmdline
+
+print(" ".join(cmd))
+result = subprocess.run(cmd, capture_output=True, text=True)
+if result.returncode == 0:
+    print(f"OK: {name} started")
+else:
+    print(f"FAIL: {result.stderr.strip()}", file=sys.stderr)
+PY
       else
-        # Container doesn't exist — recreate from backup image
-        IMAGE="backup-${c}"
-        if docker image inspect "$IMAGE" >/dev/null 2>&1; then
-          log "recreating container: $c from image $IMAGE"
-          docker run -d --name "$c" "$IMAGE" || log "WARN: recreate $c failed"
-        else
-          log "WARN: container $c and image $IMAGE not found"
-        fi
+        log "WARN: container $c — no image $IMAGE found"
       fi
     done
   fi
