@@ -183,13 +183,18 @@ PY
   # Restore dump to all possible pm2 home locations
   for pm_dir in "$HOME/.pm2" "/root/.pm2" "/home/runner/.pm2"; do
     if [ -d "$pm_dir" ] || [ "$pm_dir" = "/root/.pm2" ]; then
-      mkdir -p "$pm_dir"
-      cp "$STAGE/pm2-dump" "$pm_dir/dump.pm2"
+      if [ "$pm_dir" = "/root/.pm2" ]; then
+        sudo mkdir -p "$pm_dir" 2>/dev/null || true
+        sudo cp "$STAGE/pm2-dump" "$pm_dir/dump.pm2" 2>/dev/null || true
+      else
+        mkdir -p "$pm_dir" 2>/dev/null || true
+        cp "$STAGE/pm2-dump" "$pm_dir/dump.pm2" 2>/dev/null || true
+      fi
       log "pm2 dump restored to $pm_dir/dump.pm2"
     fi
   done
   if command -v pm2 &>/dev/null; then
-    pm2 resurrect 2>/dev/null || true
+    sudo pm2 resurrect 2>/dev/null || pm2 resurrect 2>/dev/null || true
     log "pm2 processes resurrected"
     pm2 list 2>/dev/null || true
   fi
