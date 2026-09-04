@@ -102,9 +102,16 @@ jobs:
             chmod 600 /tmp/cf/token
             nohup cloudflared tunnel run --token "$(cat /tmp/cf/token)" \
               >/tmp/cloudflared.log 2>&1 &
-            echo "cloudflared started (token tunnel)"
+            CF_PID=$!
+            echo "cloudflared started (pid $CF_PID)"
             sleep 3
             grep -oE '"level":"[^"]*"' /tmp/cloudflared.log | tail -2
+            # Auto-restart cloudflared if it dies
+            nohup bash -c "
+              while kill -0 $CF_PID 2>/dev/null; do sleep 30; done
+              echo '[\$(date -u +%FT%TZ)] cloudflared died, restarting...' >> /tmp/cloudflared.log
+              nohup cloudflared tunnel run --token \"\$(cat /tmp/cf/token)\" >>/tmp/cloudflared.log 2>&1 &
+            " >/dev/null 2>&1 &
           else
             echo "CF_TUNNEL_TOKEN not set; no tunnel"
           fi
