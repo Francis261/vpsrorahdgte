@@ -13,22 +13,15 @@ rm -rf "$STAGE" && mkdir -p "$STAGE/images" "$STAGE/home"
 # ── 1. PM2 process list ──────────────────────────────────────────────
 if command -v pm2 &>/dev/null; then
   pm2 save 2>/dev/null || true
-  # Find the dump file — pm2 saves to the current user's home
-  PM2_DUMP="$(pm2 prettylist 2>/dev/null | python3 -c "
-import sys,json
-try:
-    d=json.load(sys.stdin)
-    print(d[0].get('pm2_env',{}).get('pm_home_path','') + '/dump.pm2')
-except: print('')
-" 2>/dev/null || true)"
-  # Fallback: try common locations
-  if [ -z "$PM2_DUMP" ] || [ ! -f "$PM2_DUMP" ]; then
-    for p in "$HOME/.pm2/dump.pm2" "/root/.pm2/dump.pm2" "/home/runner/.pm2/dump.pm2"; do
-      [ -f "$p" ] && PM2_DUMP="$p" && break
-    done
-  fi
-  if [ -n "$PM2_DUMP" ] && [ -f "$PM2_DUMP" ]; then
-    cp "$PM2_DUMP" "$STAGE/pm2-dump"
+  PM2_DUMP=""
+  for p in "/root/.pm2/dump.pm2" "$HOME/.pm2/dump.pm2" "/home/runner/.pm2/dump.pm2"; do
+    if [ -f "$p" ]; then
+      PM2_DUMP="$p"
+      break
+    fi
+  done
+  if [ -n "$PM2_DUMP" ]; then
+    sudo cp "$PM2_DUMP" "$STAGE/pm2-dump" 2>/dev/null || cp "$PM2_DUMP" "$STAGE/pm2-dump" 2>/dev/null || true
     log "pm2 process list saved from $PM2_DUMP"
   else
     log "WARN: pm2 dump file not found"
@@ -80,7 +73,7 @@ fi
 # ── 4. Root home directory (SSH logs in as root, not runner) ────────
 ROOT_HOME="/root"
 log "backing up root home directory from $ROOT_HOME"
-tar -czf "$STAGE/home/home.tar.gz" \
+sudo tar -czf "$STAGE/home/home.tar.gz" \
   -C "$ROOT_HOME" \
   --exclude='.nvm' --exclude='.cache' --exclude='node_modules' \
   --exclude='.npm' --exclude='.yarn' --exclude='go' \
@@ -90,11 +83,11 @@ tar -czf "$STAGE/home/home.tar.gz" \
   --exclude='.config/Code' --exclude='.vscode' \
   --exclude='.ansible/collections' --exclude='.azure' \
   --exclude='.dotnet' --exclude='.ghcup' \
-  . 2>/dev/null || true
+  . 2>/dev/null
 if [ -f "$STAGE/home/home.tar.gz" ]; then
   log "home directory saved ($(du -sh "$STAGE/home/home.tar.gz" | cut -f1))"
 else
-  log "WARN: home tar failed to create"
+  log "ERROR: home tar failed to create"
 fi
 
 # ── 5. Metadata ──────────────────────────────────────────────────────
