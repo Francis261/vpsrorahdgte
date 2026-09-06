@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "handoff_after_min": 5,
+  "handoff_after_min": 300,
   "tunnel": {
     "hostname": "con.devgorge.com",
     "host_hostname": "host.devgorge.com",
