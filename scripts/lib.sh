@@ -6,9 +6,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # --- configurable env (defaults sensible for GitHub Actions) ---
 : "${RCLONE_CONFIG:=/tmp/rclone.conf}"
-: "${GDRIVE_SA_FILE:=/tmp/gdrive-sa.json}"
-: "${GDRIVE_REMOTE:=gdrive:}"
-: "${BACKUP_REMOTE:=${GDRIVE_REMOTE}backups/}"
+: "${S3_REMOTE:=minio:}"          # rclone remote name created by setup_rclone
+: "${S3_BUCKET:=vps-relay}"       # bucket that holds backups + the lease
+: "${BUCKET_ROOT:=${S3_REMOTE}${S3_BUCKET}/}"
+: "${BACKUP_REMOTE:=${BUCKET_ROOT}backups/}"
 : "${LEASE_PATH:=lease.json}"
 : "${HOLD_TIMEOUT_MIN:=45}"
 : "${HEARTBEAT_INTERVAL_MIN:=5}"
@@ -55,56 +56,45 @@ next_repo() {
   jq -r ".[$next].owner + \"/\" + .[$next].repo" "$REPO_ROOT/chain.json"
 }
 
-# --- rclone ---
+# --- rclone (MinIO / S3-compatible endpoint) ---
 setup_rclone() {
-  : "${DRIVE_FOLDER_ID:?DRIVE_FOLDER_ID not set (secret)}"
-  if [ -n "${RCLONE_DRIVE_TOKEN:-}" ]; then
-    cat > "$RCLONE_CONFIG" <<EOF
-[gdrive]
-type = drive
-client_id = 202264815644.apps.googleusercontent.com
-client_secret = X4Z3ca8xfWDb1Voo-F9a7ZxJ
-scope = drive
-root_folder_id = $DRIVE_FOLDER_ID
+  : "${S3_ENDPOINT:?S3_ENDPOINT not set (secret) — e.g. http://161.97.113.70:9000}"
+  : "${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID not set (secret)}"
+  : "${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY not set (secret)}"
+
+  local endpoint="$S3_ENDPOINT"
+  case "$endpoint" in
+    http://*|https://*) ;;            # rclone accepts a scheme in endpoint
+    *) endpoint="http://${endpoint}"  # bare host[:port] defaults to plain HTTP for self-hosted MinIO
+       ;;
+  esac
+
+  cat > "$RCLONE_CONFIG" <<EOF
+[minio]
+type = s3
+provider = Minio
+endpoint = $endpoint
+access_key_id = $S3_ACCESS_KEY_ID
+secret_access_key = $S3_SECRET_ACCESS_KEY
+acl = private
 EOF
-    printf 'token = %s\n' "$RCLONE_DRIVE_TOKEN" >> "$RCLONE_CONFIG"
-    return
-  fi
-  if [ -n "${GDRIVE_SERVICE_ACCOUNT_JSON:-}" ]; then
-    printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON" > "$GDRIVE_SA_FILE"
-    python3 - "$GDRIVE_SA_FILE" <<'PY'
-import json, re, sys
-p = sys.argv[1]
-d = json.load(open(p))
-if "private_key" in d:
-    d["private_key"] = d["private_key"].replace("\\n", "\n")
-    b64 = "".join(d["private_key"].split("-----BEGIN PRIVATE KEY-----")[1].split("-----END PRIVATE KEY-----")[0].split())
-    if len(b64) % 4 != 0 or not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", b64):
-        sys.exit("service account private_key base64 is corrupt (bad length or charset); re-issue the key")
-json.dump(d, open(p, "w"))
-PY
-    cat > "$RCLONE_CONFIG" <<EOF
-[gdrive]
-type = drive
-service_account_file = $GDRIVE_SA_FILE
-scope = drive
-root_folder_id = $DRIVE_FOLDER_ID
-EOF
-    return
-  fi
-  die "no Drive credentials: set RCLONE_DRIVE_TOKEN or GDRIVE_SERVICE_ACCOUNT_JSON secret"
+  chmod 600 "$RCLONE_CONFIG" 2>/dev/null || true
+
+  # Make sure the bucket exists (the relay key is scoped to it and may not be
+  # allowed to list other buckets). Harmless if it already does.
+  rclone --config "$RCLONE_CONFIG" mkdir "${S3_REMOTE}${S3_BUCKET}" >/dev/null 2>&1 || true
 }
 
-# --- lease (lease.json lives in the shared Drive folder) ---
+# --- lease (lease.json lives in the shared MinIO bucket) ---
 lease_read() {
   local lf=/tmp/lease/lease.json
   rm -rf /tmp/lease && mkdir -p /tmp/lease
-  if rclone --config "$RCLONE_CONFIG" copy "${GDRIVE_REMOTE}${LEASE_PATH}" /tmp/lease/ >/dev/null 2>&1; then
+  if rclone --config "$RCLONE_CONFIG" copy "${BUCKET_ROOT}${LEASE_PATH}" /tmp/lease/ >/dev/null 2>&1; then
     [ -f "$lf" ] && cat "$lf"
   fi
 }
 
-lease_upload() { rclone --config "$RCLONE_CONFIG" moveto "$1" "${GDRIVE_REMOTE}${LEASE_PATH}"; }
+lease_upload() { rclone --config "$RCLONE_CONFIG" moveto "$1" "${BUCKET_ROOT}${LEASE_PATH}"; }
 
 lease_write() {
   local lf=/tmp/lease-write.json

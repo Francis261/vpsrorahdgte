@@ -1,14 +1,14 @@
 # vps-relay
 
 A GitHub Actions "VPS" that lives in a Docker container and migrates itself
-across multiple GitHub accounts every ~5 hours. State is backed up to Google
-Drive and restored on the next account, and you reach it over a stable
-Cloudflare Access-protected hostname.
+across multiple GitHub accounts every ~5 hours. State is backed up to a
+self-hosted MinIO (S3) bucket and restored on the next account, and you reach
+it over a stable Cloudflare Access-protected hostname.
 
 GitHub-hosted runners are hard-killed at 6 hours, so this repo:
 
 1. runs a single `vps` container (pm2 + your services + opencode + sshd + cloudflared) for ~5h
-2. at the 5h mark: commits + saves the container, tars host paths from `mustBackup.json`, uploads to Google Drive
+2. at the 5h mark: commits + saves the container, tars host paths from `mustBackup.json`, uploads to MinIO (S3)
 3. hands off via `repository_dispatch` to the next account in `chain.json`
 4. that account pulls the backup, restores, runs, and repeats
 5. a scheduled watchdog on every account recovers if a lease goes stale (>45 min)
@@ -33,11 +33,28 @@ scripts/                       # restore / run / loop / backup / handoff / heart
   branch** (`repository_dispatch` only fires there).
 - Public repos = free hosted-runner minutes. Private repos bill ~1440 min/day.
 
-## 2. Google Drive (backup storage)
+## 2. MinIO / S3 (backup storage)
 
-1. Google Cloud Console → create a **service account** → enable the **Drive API** → download the JSON key.
-2. Create a folder in your Drive, share it with the service account email (**Editor**).
-3. Note the folder ID (from the folder URL, the part after `/folders/`).
+Backups and the lease live in a single S3 bucket on any S3-compatible store —
+here a self-hosted MinIO server.
+
+1. Create the bucket (once): `mc mb local/vps-relay`
+2. Create a **scoped service account** so the runner never sees your root key:
+
+```sh
+mc admin policy create local vps-relay-policy policy.json   # allow List/Get/Put/Delete on vps-relay only
+mc admin user svcacct add local <ROOT_USER> --policy /path/to/policy.json
+# prints an Access Key + Secret Key → those become the two S3_* secrets
+```
+
+3. The bucket must be reachable **from the public internet** (GitHub-hosted
+   runners pull from it). That means an open port (e.g. `ufw allow 9000/tcp`
+   and `MINIO_SERVER_URL=http://<public-ip>:9000`) or a reverse proxy / Cloudflare
+   tunnel hostname in front of MinIO's API port. Plain `http://IP:9000` is fine:
+   every request is SigV4-signed.
+
+Note: the relay keeps exactly one `host-backup.tar.gz` — each cycle deletes the
+previous one before uploading, so steady-state usage is ~1x your state size.
 
 ## 3. Cloudflare tunnel + Access (connectivity)
 
@@ -77,8 +94,10 @@ For **each** account, create a fine-grained PAT in the **next** account's repo
 
 | Secret                        | Value |
 |-------------------------------|-------|
-| `GDRIVE_SERVICE_ACCOUNT_JSON` | the service account JSON key |
-| `DRIVE_FOLDER_ID`             | shared Drive folder ID |
+| `S3_ENDPOINT`                 | MinIO API URL the runners can reach, e.g. `http://161.97.113.70:9000` |
+| `S3_ACCESS_KEY_ID`            | service-account access key (`mc admin user svcacct add ...`) |
+| `S3_SECRET_ACCESS_KEY`        | matching secret key |
+| `S3_BUCKET`                   | optional, defaults to `vps-relay` |
 | `HANDOFF_PAT`                 | fine-grained PAT (from the **next** account) |
 | `CF_TUNNEL_CREDS`             | `credentials.json` from `cloudflared tunnel create` (named-tunnel mode) |
 | `CF_TUNNEL_TOKEN`             | `cloudflared tunnel run --token <TOKEN>` token (token mode) |
@@ -130,7 +149,9 @@ they persist across handoffs because they live in the committed container).
 - The tunnel hostname is stable (named tunnel + Access), so your URL and Access
   session survive every handoff.
 - The runner VM has no public inbound IP — all access goes through Cloudflare.
-- `docker save` of a heavy image counts against Drive's 15 GB free quota.
+- `docker save` of a heavy image counts against whatever disk backs your MinIO
+  bucket (keep an eye on free space — the relay replaces the previous backup,
+  so steady-state usage is ~1x your state size).
 - Watchdog uses `actions: write` on the `GITHUB_TOKEN` to re-boot `vps.yml`.
 - The `web_port` / `ssh_port` in `mustBackup.json` are the ports **inside** the
   container (sshd = 22, pm2 web app = 8080). The host-side debug ports are

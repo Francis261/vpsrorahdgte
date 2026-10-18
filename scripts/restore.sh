@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Restore host state from Drive backup: home + Docker + pm2.
+# Restore host state from MinIO (S3) backup: home + Docker + pm2.
 # Exits 0 quietly when there is no backup yet (fresh start) or skip requested.
 set -uo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -15,16 +15,16 @@ STAGE=/tmp/restore
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 
 # Find newest backup
-log "looking for backup on Drive..."
+log "looking for backup in MinIO (${BACKUP_REMOTE})..."
 latest="$(rclone --config "$RCLONE_CONFIG" lsf "${BACKUP_REMOTE}" 2>/dev/null | grep '^host-backup\.tar\.gz$' | head -1 || true)"
 if [ -z "$latest" ]; then
-  log "no backup on Drive; starting fresh"
+  log "no backup in MinIO; starting fresh"
   exit 0
 fi
 
 log "restoring backup: $latest"
 rclone --config "$RCLONE_CONFIG" copy "${BACKUP_REMOTE}${latest}" "$STAGE/" || {
-  log "ERROR: failed to download backup from Drive"
+  log "ERROR: failed to download backup from MinIO"
   exit 1
 }
 

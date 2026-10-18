@@ -10,7 +10,7 @@ setup_rclone
 case "$cmd" in
   read)
     c="$(lease_read || true)"
-    [ -n "$c" ] && echo "$c" || echo "no lease on Drive"
+    [ -n "$c" ] && echo "$c" || echo "no lease in MinIO"
     ;;
   acquire)
     holder="${2:?usage: acquire <holder> [run_id]}"

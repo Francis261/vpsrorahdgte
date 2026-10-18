@@ -19,9 +19,10 @@ jobs:
     timeout-minutes: 10
     env:
       RCLONE_CONFIG: /tmp/rclone.conf
-      GDRIVE_SA_FILE: /tmp/gdrive-sa.json
-      GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
-      DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+      S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+      S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+      S3_BUCKET: ${{ secrets.S3_BUCKET || 'vps-relay' }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4

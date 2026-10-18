@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Comprehensive host backup: Docker images + volumes + home dir + pm2 state.
-# Uploads a single host-backup.tar.gz to Drive, deleting the old one first.
+# Uploads a single host-backup.tar.gz to MinIO (S3), deleting the old one first.
 # NOTE: No set -e — backup failures should log, not kill the VPS.
 set -uo pipefail
 source "$(dirname "$0")/lib.sh"

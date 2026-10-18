@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Watchdog: if the Drive lease is stale (holder died, missed handoff, account
+# Watchdog: if the MinIO lease is stale (holder died, missed handoff, account
 # hit the 6h kill, etc.) and this repo has no run in progress, acquire the
 # lease and boot our own vps.yml. Runs from watchdog.yml on a schedule.
 set -euo pipefail
