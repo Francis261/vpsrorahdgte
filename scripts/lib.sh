@@ -6,14 +6,30 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # --- configurable env (defaults sensible for GitHub Actions) ---
 : "${RCLONE_CONFIG:=/tmp/rclone.conf}"
-: "${S3_REMOTE:=minio:}"          # rclone remote name created by setup_rclone
+: "${STORAGE_BACKEND:=auto}"      # auto | minio | ghrelease (auto = ghrelease iff STORAGE_REPO_PAT is set)
+: "${HOLD_TIMEOUT_MIN:=45}"
+: "${HEARTBEAT_INTERVAL_MIN:=5}"
+: "${KEEP_BACKUPS:=1}"
+
+# minio backend
+: "${S3_REMOTE:=minio:}"          # rclone remote name created by minio_setup
 : "${S3_BUCKET:=vps-relay}"       # bucket that holds backups + the lease
 : "${BUCKET_ROOT:=${S3_REMOTE}${S3_BUCKET}/}"
 : "${BACKUP_REMOTE:=${BUCKET_ROOT}backups/}"
 : "${LEASE_PATH:=lease.json}"
-: "${HOLD_TIMEOUT_MIN:=45}"
-: "${HEARTBEAT_INTERVAL_MIN:=5}"
-: "${KEEP_BACKUPS:=1}"
+
+# ghrelease backend (chunked GitHub release assets on a private repo)
+: "${STORAGE_REPO:=}"             # owner/name of the private backup repo
+: "${STORAGE_REPO_PAT:=}"         # fine-grained PAT, Contents: Read and write, scoped to STORAGE_REPO
+: "${CHUNK_BYTES:=1610612736}"    # 1.5 GiB per chunk (GitHub caps release assets at 2 GiB)
+: "${MAX_CHUNKS:=998}"            # GitHub allows 1000 assets per release
+: "${MAX_BACKUP_GB:=20}"          # refuse to upload anything bigger than this
+: "${BACKUP_TAG_PREFIX:=b-}"
+: "${STATE_TAG:=state}"           # permanent release whose body holds the lease
+: "${STORAGE_KEEP_DRAFT_HOURS:=2}" # GC orphan drafts left by a killed upload
+
+# storage backends live next to us
+source "$(dirname "${BASH_SOURCE[0]}")/storage.sh"
 
 log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
@@ -56,51 +72,20 @@ next_repo() {
   jq -r ".[$next].owner + \"/\" + .[$next].repo" "$REPO_ROOT/chain.json"
 }
 
-# --- rclone (MinIO / S3-compatible endpoint) ---
-setup_rclone() {
-  : "${S3_ENDPOINT:?S3_ENDPOINT not set (secret) — e.g. http://161.97.113.70:9000}"
-  : "${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID not set (secret)}"
-  : "${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY not set (secret)}"
-
-  local endpoint="$S3_ENDPOINT"
-  case "$endpoint" in
-    http://*|https://*) ;;            # rclone accepts a scheme in endpoint
-    *) endpoint="http://${endpoint}"  # bare host[:port] defaults to plain HTTP for self-hosted MinIO
-       ;;
-  esac
-
-  cat > "$RCLONE_CONFIG" <<EOF
-[minio]
-type = s3
-provider = Minio
-endpoint = $endpoint
-access_key_id = $S3_ACCESS_KEY_ID
-secret_access_key = $S3_SECRET_ACCESS_KEY
-acl = private
-EOF
-  chmod 600 "$RCLONE_CONFIG" 2>/dev/null || true
-
-  # Make sure the bucket exists (the relay key is scoped to it and may not be
-  # allowed to list other buckets). Harmless if it already does.
-  rclone --config "$RCLONE_CONFIG" mkdir "${S3_REMOTE}${S3_BUCKET}" >/dev/null 2>&1 || true
-}
-
-# --- lease (lease.json lives in the shared MinIO bucket) ---
-lease_read() {
-  local lf=/tmp/lease/lease.json
-  rm -rf /tmp/lease && mkdir -p /tmp/lease
-  if rclone --config "$RCLONE_CONFIG" copy "${BUCKET_ROOT}${LEASE_PATH}" /tmp/lease/ >/dev/null 2>&1; then
-    [ -f "$lf" ] && cat "$lf"
-  fi
-}
-
-lease_upload() { rclone --config "$RCLONE_CONFIG" moveto "$1" "${BUCKET_ROOT}${LEASE_PATH}"; }
+# --- lease (backend decides where it lives: bucket root or a 'state' release body) ---
+lease_read() { case "$(storage_backend)" in
+  ghrelease) ghrelease_lease_read ;;
+  minio)     minio_lease_read ;;
+esac; }
 
 lease_write() {
   local lf=/tmp/lease-write.json
   jq -n --arg h "$1" --arg s "$2" --arg hb "$3" --arg n "$4" --arg r "$5" \
     '{holder:$h,since:$s,heartbeat:$hb,next:$n,run_id:$r}' > "$lf"
-  lease_upload "$lf"
+  case "$(storage_backend)" in
+    ghrelease) ghrelease_lease_write "$lf" ;;
+    minio)     minio_lease_write "$lf" ;;
+  esac
 }
 
 lease_holder() { local c; c="$(lease_read || true)"; printf '%s' "$c" | jq -r '.holder // ""'; }

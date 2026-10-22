@@ -23,6 +23,7 @@ chain.json                     # ordered list of accounts in the relay
 Dockerfile                     # the VPS image (pm2, sshd, opencode, cloudflared, docker CLI)
 services/                      # pm2 apps + seed bashrc/opencode/authorized_keys
 scripts/                       # restore / run / loop / backup / handoff / heartbeat / watchdog / lease
+scripts/storage.sh             # storage backends: minio (rclone) + ghrelease (chunked release assets)
 ```
 
 ## 1. Repos
@@ -33,7 +34,43 @@ scripts/                       # restore / run / loop / backup / handoff / heart
   branch** (`repository_dispatch` only fires there).
 - Public repos = free hosted-runner minutes. Private repos bill ~1440 min/day.
 
-## 2. MinIO / S3 (backup storage)
+## 2. Backup storage (pick a backend)
+
+`STORAGE_BACKEND` (repo **variable**, optional) chooses where backups and the
+lease go. `auto` (default) = `ghrelease` if the `STORAGE_REPO_PAT` secret is
+set, otherwise `minio`.
+
+### 2a. `ghrelease` — chunked assets on a private GitHub repo
+
+The backup tarball is split into ≤1.5 GiB chunks and uploaded as the assets of
+a GitHub release on a **private storage repo** (any account). The next round
+downloads the chunks, verifies every sha256, reassembles the tarball and only
+then touches `/root`.
+
+1. Create an empty **private** repo (e.g. `OtherAccount/vps-relay-storage`) and
+   push at least one commit to it (releases cannot be published from an empty
+   repo — the relay will use the API, the commit just has to exist).
+2. From the storage account, create a **fine-grained PAT** with
+   *Contents: Read and write* scoped to that one repo, no expiration (the relay
+   runs forever; an expired token halts the chain).
+3. Set the secrets in **every** relay repo: `STORAGE_REPO` (`owner/name`) and
+   `STORAGE_REPO_PAT`.
+
+How a cycle swaps backups (never a moment with zero backups):
+
+```
+create DRAFT release b-<UTC ts>  →  upload manifest.json + chunk_0000..  →  verify
+  →  publish (tag created)  →  only now delete the previous release + tag
+```
+
+A run killed mid-upload leaves an invisible draft, which the next cycle
+garbage-collects after `STORAGE_KEEP_DRAFT_HOURS` (default 2). The lease lives
+in the body of a permanent `state` release (1 GET to read, 1 PATCH per
+heartbeat). Guards: `MAX_CHUNKS=998` (GitHub allows 1000 assets/release),
+`CHUNK_BYTES=1610612736` (1.5 GiB — GitHub caps each asset at 2 GiB) and
+`MAX_BACKUP_GB=20` (refuse rather than blow the 6h job window).
+
+### 2b. `minio` — any S3-compatible endpoint
 
 Backups and the lease live in a single S3 bucket on any S3-compatible store —
 here a self-hosted MinIO server.
@@ -53,8 +90,10 @@ mc admin user svcacct add local <ROOT_USER> --policy /path/to/policy.json
    tunnel hostname in front of MinIO's API port. Plain `http://IP:9000` is fine:
    every request is SigV4-signed.
 
-Note: the relay keeps exactly one `host-backup.tar.gz` — each cycle deletes the
-previous one before uploading, so steady-state usage is ~1x your state size.
+Note: the relay keeps exactly one `host-backup.tar.gz` — the previous one is
+deleted only **after** the new one has been uploaded and verified, so there is
+never a cycle without a restorable backup. Steady-state usage is ~1x your state
+size.
 
 ## 3. Cloudflare tunnel + Access (connectivity)
 
@@ -94,13 +133,18 @@ For **each** account, create a fine-grained PAT in the **next** account's repo
 
 | Secret                        | Value |
 |-------------------------------|-------|
-| `S3_ENDPOINT`                 | MinIO API URL the runners can reach, e.g. `http://161.97.113.70:9000` |
-| `S3_ACCESS_KEY_ID`            | service-account access key (`mc admin user svcacct add ...`) |
-| `S3_SECRET_ACCESS_KEY`        | matching secret key |
-| `S3_BUCKET`                   | optional, defaults to `vps-relay` |
+| `STORAGE_REPO`                | private backup repo, `owner/name` (ghrelease backend) |
+| `STORAGE_REPO_PAT`            | fine-grained PAT from the storage account: *Contents: Read and write*, scoped to that repo |
+| `S3_ENDPOINT`                 | MinIO API URL the runners can reach, e.g. `http://161.97.113.70:9000` (minio backend) |
+| `S3_ACCESS_KEY_ID`            | service-account access key (`mc admin user svcacct add ...`) (minio backend) |
+| `S3_SECRET_ACCESS_KEY`        | matching secret key (minio backend) |
+| `S3_BUCKET`                   | optional, defaults to `vps-relay` (minio backend) |
 | `HANDOFF_PAT`                 | fine-grained PAT (from the **next** account) |
 | `CF_TUNNEL_CREDS`             | `credentials.json` from `cloudflared tunnel create` (named-tunnel mode) |
 | `CF_TUNNEL_TOKEN`             | `cloudflared tunnel run --token <TOKEN>` token (token mode) |
+
+Optional repo **variables**: `STORAGE_BACKEND` (`auto`/`ghrelease`/`minio`),
+`CHUNK_BYTES` (default `1610612736` = 1.5 GiB), `MAX_BACKUP_GB` (default `20`).
 
 ## 6. First boot
 

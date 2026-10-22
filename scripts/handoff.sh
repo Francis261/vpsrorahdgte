@@ -4,7 +4,7 @@
 set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
-setup_rclone
+storage_setup
 
 self="$(self_repo)"
 next="$(next_repo "$self")"

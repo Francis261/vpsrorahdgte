@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Comprehensive host backup: Docker images + volumes + home dir + pm2 state.
-# Uploads a single host-backup.tar.gz to MinIO (S3), deleting the old one first.
+# Uploads a single host-backup.tar.gz to the configured storage backend
+# (MinIO/S3 via rclone, or chunked GitHub release assets — see scripts/storage.sh).
 # NOTE: No set -e — backup failures should log, not kill the VPS.
 set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
-setup_rclone
+storage_setup
 
 STAGE=/tmp/backup
 rm -rf "$STAGE" && mkdir -p "$STAGE/images" "$STAGE/home"
@@ -115,17 +116,18 @@ SIZE="$(du -h "$STAGE/$ARTIFACT" | cut -f1)"
 log "artifact ready: $ARTIFACT ($SIZE)"
 
 # ── 7. Delete old backup, upload new ────────────────────────────────
-rclone --config "$RCLONE_CONFIG" delete "${BACKUP_REMOTE}host-backup.tar.gz" 2>/dev/null || true
-rclone --config "$RCLONE_CONFIG" copy "$STAGE/$ARTIFACT" "${BACKUP_REMOTE}" || {
-  log "ERROR: rclone upload failed"
+SIZE_BYTES="$(stat -c%s "$STAGE/$ARTIFACT" 2>/dev/null || echo 0)"
+if [ "$SIZE_BYTES" -gt $((MAX_BACKUP_GB * 1024 * 1024 * 1024)) ]; then
+  log "ERROR: $ARTIFACT is $((SIZE_BYTES / 1024 / 1024)) MiB > MAX_BACKUP_GB=${MAX_BACKUP_GB}GB"
+  log "ERROR: refusing to upload (would exceed the 6h job window) — previous backup left untouched"
   exit 1
-}
-log "uploaded $ARTIFACT"
+fi
 
-# Clean any leftover old-format backups
-rclone --config "$RCLONE_CONFIG" lsf "${BACKUP_REMOTE}" 2>/dev/null | grep -v '^host-backup.tar.gz$' | \
-  grep '\.tar\.gz$' | while read -r f; do
-    [ -n "$f" ] && rclone --config "$RCLONE_CONFIG" delete "${BACKUP_REMOTE}$f" && log "pruned old format: $f"
-  done || true
+if storage_put_backup "$STAGE/$ARTIFACT"; then
+  log "uploaded $ARTIFACT"
+else
+  log "ERROR: storage upload failed — previous backup left untouched"
+  exit 1
+fi
 
 log "backup complete"

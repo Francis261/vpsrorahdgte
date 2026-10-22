@@ -5,7 +5,7 @@ set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
 cmd="${1:-read}"
-setup_rclone
+storage_setup
 
 case "$cmd" in
   read)
