@@ -105,9 +105,27 @@ ghs() { GH_TOKEN="$STORAGE_REPO_PAT" GH_REPO="$STORAGE_REPO" gh "$@"; }
 ghrelease_setup() {
   : "${STORAGE_REPO:?STORAGE_REPO not set (secret) — e.g. OtherAccount/vps-relay-storage}"
   : "${STORAGE_REPO_PAT:?STORAGE_REPO_PAT not set (secret) — fine-grained PAT, Contents: Read and write, scoped to STORAGE_REPO}"
+
+  # Fail with a *useful* message. Printing the raw value would just come back as
+  # '***' from GitHub if it happens to equal another secret, so validate the
+  # shape instead of echoing it.
+  case "$STORAGE_REPO" in
+    github_pat_*|ghp_*|gho_*|ghu_*|ghs_*|ghr_*)
+      die "STORAGE_REPO holds a token, not a repo path — set STORAGE_REPO to 'owner/name' (e.g. Francis261/hsjsjsjehrhbackup) and the token only in STORAGE_REPO_PAT" ;;
+  esac
+  case "$STORAGE_REPO" in
+    ?*/?*) ;;
+    *) die "STORAGE_REPO must be 'owner/name' but contains no '/'. A MinIO bucket name like 'vps-relay' belongs in S3_BUCKET, not here." ;;
+  esac
+
   command -v gh >/dev/null 2>&1 || die "gh CLI not found (preinstalled on GitHub-hosted runners)"
-  ghs api "repos/$STORAGE_REPO" --jq .full_name >/dev/null 2>&1 || \
-    die "cannot reach storage repo '$STORAGE_REPO' with STORAGE_REPO_PAT"
+
+  local reached
+  # '|| true' matters: pipefail + errexit would kill the script silently before
+  # die() gets to explain what went wrong
+  reached="$(ghs api "repos/$STORAGE_REPO" --jq .full_name 2>/dev/null | head -1 | tr '[:upper:]' '[:lower:]' || true)"
+  [ "$reached" = "$(printf '%s' "$STORAGE_REPO" | tr '[:upper:]' '[:lower:]')" ] || \
+    die "cannot reach storage repo '$STORAGE_REPO' with STORAGE_REPO_PAT. Check that (a) the repo exists, (b) the PAT has Contents: Read and write, and (c) the PAT's Repository access includes that repo."
 }
 
 ghrelease_latest_backup_tag() {
