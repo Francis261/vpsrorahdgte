@@ -29,7 +29,7 @@ done
 # Promote DRBD to primary if enabled (before backup so backup includes DRBD data)
 if [ "${DRBD_ENABLED:-false}" = "true" ] && [ -f "$REPO_ROOT/scripts/drbd-setup.sh" ]; then
   log "Promoting DRBD to primary for handoff..."
-  if sudo bash "$REPO_ROOT/scripts/drbd-setup.sh" promote; then
+  if sudo -E bash "$REPO_ROOT/scripts/drbd-setup.sh" promote; then
     log "DRBD promoted successfully"
   else
     log "WARN: DRBD promotion failed (exit code $?)"
