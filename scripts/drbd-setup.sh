@@ -15,7 +15,14 @@
 # Requires: Cloudflare tunnel with private network enabled (100.64.0.0/10)
 
 set -euo pipefail
-source "$(dirname "$0")/lib.sh"
+
+# Source lib.sh using GITHUB_WORKSPACE env var (set by GitHub Actions)
+# This works even when run via sudo, since GITHUB_WORKSPACE is preserved.
+LIB_PATH="${GITHUB_WORKSPACE:-$(dirname "$0")}/scripts/lib.sh"
+if [ ! -f "$LIB_PATH" ]; then
+  LIB_PATH="$(dirname "$0")/lib.sh"
+fi
+source "$LIB_PATH"
 
 DRBD_ROLE="${1:-primary}"
 DRBD_PRIMARY_REPO="${2:-}"
