@@ -96,6 +96,15 @@ lease_write() {
   esac
 }
 
+# Upload a pre-built lease JSON file (used by DRBD setup)
+lease_upload() {
+  local lf="$1"
+  case "$(storage_backend)" in
+    ghrelease) ghrelease_lease_write "$lf" ;;
+    minio)     minio_lease_write "$lf" ;;
+  esac
+}
+
 lease_holder() { local c; c="$(lease_read || true)"; printf '%s' "$c" | jq -r '.holder // ""'; }
 lease_age_min() {
   local c hb hb_epoch
