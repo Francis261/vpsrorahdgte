@@ -285,7 +285,13 @@ setup_primary() {
     fi
     sleep 5
   done
-  [ -n "$peer_ip" ] && [ "$peer_ip" != "null" ] && [ "$peer_ip" != "$my_ip" ] || die "Secondary did not register different private IP in time (got: '$peer_ip', mine: '$my_ip')"
+  if [ -z "$peer_ip" ] || [ "$peer_ip" = "null" ] || [ "$peer_ip" = "$my_ip" ]; then
+    log "WARN: Secondary did not register different private IP in time (got: '$peer_ip', mine: '$my_ip')"
+    log "WARN: Proceeding without DRBD peer (single-repo mode or secondary not started)"
+    peer_ip="$my_ip"  # Use own IP for config, but DRBD will be in standalone mode
+  else
+    log "Secondary private IP: $peer_ip"
+  fi
 
   log "Secondary private IP: $peer_ip"
   generate_drbd_config "$my_ip" "$peer_ip" "primary"
