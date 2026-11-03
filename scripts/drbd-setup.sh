@@ -79,6 +79,81 @@ write_our_private_ip() {
   lease_upload "$lf"
 }
 
+# Test mesh connectivity and print private IP info
+test_mesh() {
+  local peer_ip="${1:-}"
+  
+  log "=== Cloudflare Zero Trust Mesh Connectivity Test ==="
+  
+  # Get our private IP
+  log "Detecting our private IP..."
+  local my_ip
+  if my_ip="$(get_cf_private_ip)"; then
+    log "✓ Our private IP: $my_ip"
+  else
+    log "✗ Could not detect private IP"
+    log "  Tried: cloudflared metrics (port 43493), interface scan (100.64.0.0/10)"
+    return 1
+  fi
+  
+  # Check cloudflared tunnel is running
+  if pgrep -f 'cloudflared tunnel' >/dev/null; then
+    log "✓ cloudflared tunnel process found"
+  else
+    log "✗ cloudflared tunnel NOT running"
+  fi
+  
+  # Check WARP/WARP-connector status
+  if command -v warp-cli >/dev/null 2>&1; then
+    if warp-cli --accept-tos status 2>/dev/null | grep -q "Connected"; then
+      log "✓ WARP connector connected"
+      warp-cli --accept-tos status 2>/dev/null | sed 's/^/  /'
+    else
+      log "⚠ WARP connector not connected (may not be needed if using cloudflared only)"
+    fi
+  else
+    log "ℹ warp-cli not installed (using cloudflared tunnel only)"
+  fi
+  
+  # Show all 100.64.0.0/10 interfaces
+  log "All private network interfaces (100.64.0.0/10):"
+  ip -4 addr show 2>/dev/null | grep -E '100\.(6[4-9]|[7-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.[0-9]+\.[0-9]+' | sed 's/^/  /' || log "  (none found)"
+  
+  # Test peer connectivity if provided
+  if [ -n "$peer_ip" ]; then
+    log "Testing connectivity to peer: $peer_ip:$DRBD_PORT"
+    
+    # Test TCP port
+    if timeout 5 bash -c "</dev/tcp/$peer_ip/$DRBD_PORT" 2>/dev/null; then
+      log "✓ TCP $peer_ip:$DRBD_PORT reachable"
+    else
+      log "✗ TCP $peer_ip:$DRBD_PORT NOT reachable"
+      log "  Check: both tunnels in same Zero Trust org, Private Networks enabled"
+    fi
+    
+    # Test ping (if ICMP allowed)
+    if ping -c 2 -W 3 "$peer_ip" >/dev/null 2>&1; then
+      log "✓ ICMP ping to $peer_ip works"
+    else
+      log "⚠ ICMP ping to $peer_ip failed (may be blocked, TCP is what matters)"
+    fi
+  else
+    log "ℹ No peer IP provided — skipping peer connectivity test"
+    log "  To test: $0 test <peer_private_ip>"
+  fi
+  
+  # Show lease info if available
+  local lease
+  lease="$(lease_read 2>/dev/null || true)"
+  if [ -n "$lease" ]; then
+    log "Current lease contents:"
+    printf '%s' "$lease" | jq . 2>/dev/null | sed 's/^/  /' || printf '%s' "$lease" | sed 's/^/  /'
+  fi
+  
+  log "=== Test Complete ==="
+  return 0
+}
+
 # Install DRBD packages
 install_drbd() {
   if command -v drbdadm >/dev/null 2>&1; then
@@ -276,8 +351,11 @@ case "$DRBD_ROLE" in
   promote)
     promote_to_primary
     ;;
+  test)
+    test_mesh "${2:-}"
+    ;;
   *)
-    echo "Usage: $0 {primary|secondary <primary_repo>|promote}" >&2
+    echo "Usage: $0 {primary|secondary <primary_repo>|promote|test [peer_ip]}" >&2
     exit 1
     ;;
 esac
