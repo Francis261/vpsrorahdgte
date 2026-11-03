@@ -16,13 +16,21 @@
 
 set -euo pipefail
 
-# Source lib.sh using GITHUB_WORKSPACE env var (set by GitHub Actions)
-# This works even when run via sudo, since GITHUB_WORKSPACE is preserved.
-LIB_PATH="${GITHUB_WORKSPACE:-$(dirname "$0")}/scripts/lib.sh"
-if [ ! -f "$LIB_PATH" ]; then
-  LIB_PATH="$(dirname "$0")/lib.sh"
-fi
-source "$LIB_PATH"
+# Source lib.sh - try multiple locations (sudo may change cwd)
+# GitHub Actions runner workspace is typically at this path:
+LIB_PATHS=(
+  "/home/runner/work/vpsrorahdgte/vpsrorahdgte/scripts/lib.sh"
+  "${GITHUB_WORKSPACE:-}/scripts/lib.sh"
+  "$(dirname "$0")/lib.sh"
+)
+for p in "${LIB_PATHS[@]}"; do
+  if [ -f "$p" ]; then
+    source "$p"
+    break
+  fi
+done
+# Verify we got the functions
+type log >/dev/null 2>&1 || { echo "FATAL: Failed to source lib.sh" >&2; exit 1; }
 
 DRBD_ROLE="${1:-primary}"
 DRBD_PRIMARY_REPO="${2:-}"
