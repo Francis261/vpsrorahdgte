@@ -1,0 +1,81 @@
+name: DRBD Sync Trigger
+
+on:
+  schedule:
+    # Runs at 240 minutes (4 hours) after the hour — aligns with VPS handoff at 300 min
+    - cron: '0 */4 * * *'   # every 4 hours at minute 0 (00:00, 04:00, 08:00, ...)
+    # Alternative: run 60 min before handoff if handoff_after_min=300
+    # - cron: '0 4,8,12,16,20 * * *'  # at 4h, 8h, etc.
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force trigger even if not near handoff window'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  trigger-drdb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RCLONE_CONFIG: /tmp/rclone.conf
+      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+      S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+      S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+      S3_BUCKET: ${{ secrets.S3_BUCKET || 'vps-relay' }}
+      STORAGE_BACKEND: ${{ vars.STORAGE_BACKEND || 'auto' }}
+      STORAGE_REPO: ${{ secrets.STORAGE_REPO }}
+      STORAGE_REPO_PAT: ${{ secrets.STORAGE_REPO_PAT }}
+      GH_TOKEN: ${{ github.token }}
+      HANDOFF_PAT: ${{ secrets.HANDOFF_PAT }}
+      DRBD_ENABLED: ${{ vars.DRBD_ENABLED || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine if we should trigger DRBD
+        id: check
+        run: |
+          # Only trigger if we're the current lease holder and within 70-80 min of handoff
+          # handoff_after_min defaults to 300, so trigger at ~240 min = 60 min before handoff
+          source scripts/lib.sh
+          setup_rclone
+          self="$(self_repo)"
+          holder="$(lease_holder)"
+          age="$(lease_age_min)"
+          handoff="$(handoff_after_min)"
+          trigger_at=$((handoff - 60))
+          
+          echo "self=$self holder=$holder age=${age}min handoff=${handoff}min trigger_at=${trigger_at}min"
+          
+          if [ "$holder" != "$self" ]; then
+            echo "not lease holder; skipping"
+            echo "should_trigger=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if [ "$age" -ge "$trigger_at" ] && [ "$age" -le "$handoff" ]; then
+            echo "in DRBD trigger window; will trigger next account"
+            echo "should_trigger=true" >> $GITHUB_OUTPUT
+          else
+            echo "not in trigger window (age=${age}min, window=${trigger_at}-${handoff}min)"
+            echo "should_trigger=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger DRBD sync on next account
+        if: steps.check.outputs.should_trigger == 'true'
+        run: |
+          source scripts/lib.sh
+          next="$(next_repo "$(self_repo)")"
+          echo "Dispatching drbd-start to $next"
+          gh workflow run vps.yml --repo "$next" -f drbd_mode=secondary -f drbd_primary_repo="$(self_repo)" 2>/dev/null || \
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${HANDOFF_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$next/dispatches" \
+            -d "{\"event_type\":\"drbd-start\",\"client_payload\":{\"primary\":\"$(self_repo)\",\"mode\":\"secondary\"}}"
+          echo "DRBD start dispatched to $next"

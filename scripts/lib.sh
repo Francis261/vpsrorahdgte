@@ -31,6 +31,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # storage backends live next to us
 source "$(dirname "${BASH_SOURCE[0]}")/storage.sh"
 
+# DRBD config (host directory replication via loop device over Cloudflare mesh)
+: "${DRBD_ENABLED:=false}"          # set to 'true' to enable DRBD sync
+: "${DRBD_RESOURCE:=vpsdata}"       # DRBD resource name
+: "${DRBD_DEVICE:=/dev/drbd0}"      # DRBD block device
+: "${DRBD_MOUNT:=/mnt/drbd}"        # mount point for replicated volume
+: "${DRBD_SIZE_GB:=10}"             # size of replicated volume in GB
+: "${DRBD_PORT:=7789}"              # DRBD replication port (over CF private network)
+
 log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
 
@@ -101,10 +109,18 @@ lease_age_min() {
 }
 
 lease_touch() {
-  local holder="$1" run_id="${2:-}" cur since next
+  local holder="$1" run_id="${2:-}" cur since next drbd_sec
   cur="$(lease_read || true)"
   since="$(printf '%s' "$cur" | jq -r '.since // ""')"
   next="$(printf '%s' "$cur" | jq -r '.next // ""')"
+  drbd_sec="$(printf '%s' "$cur" | jq -r '.drbd_secondary // false')"
   [ -n "$since" ] || since="$(now_iso)"
-  lease_write "$holder" "$since" "$(now_iso)" "$next" "$run_id"
+  local lf=/tmp/lease-write.json
+  jq -n --arg h "$holder" --arg s "$since" --arg hb "$(now_iso)" \
+    --arg n "$next" --arg r "$run_id" --argjson d "$drbd_sec" \
+    '{holder:$h,since:$s,heartbeat:$hb,next:$n,run_id:$r,drbd_secondary:$d}' > "$lf"
+  case "$(storage_backend)" in
+    ghrelease) ghrelease_lease_write "$lf" ;;
+    minio)     minio_lease_write "$lf" ;;
+  esac
 }

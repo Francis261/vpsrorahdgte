@@ -2,28 +2,33 @@
 
 A GitHub Actions "VPS" that lives in a Docker container and migrates itself
 across multiple GitHub accounts every ~5 hours. State is backed up to a
-self-hosted MinIO (S3) bucket and restored on the next account, and you reach
-it over a stable Cloudflare Access-protected hostname.
+self-hosted MinIO (S3) bucket or a private GitHub repo (chunked release assets)
+and restored on the next account. Optional **DRBD** replication syncs a host
+directory in real time between the current and next VPS, making handoff nearly
+instantaneous. You reach it over a stable Cloudflare Access-protected hostname.
 
 GitHub-hosted runners are hard-killed at 6 hours, so this repo:
 
 1. runs a single `vps` container (pm2 + your services + opencode + sshd + cloudflared) for ~5h
-2. at the 5h mark: commits + saves the container, tars host paths from `mustBackup.json`, uploads to MinIO (S3)
-3. hands off via `repository_dispatch` to the next account in `chain.json`
-4. that account pulls the backup, restores, runs, and repeats
-5. a scheduled watchdog on every account recovers if a lease goes stale (>45 min)
+2. at 4h (optional): starts DRBD secondary on the next account, syncs data over Cloudflare mesh
+3. at 5h: commits + saves the container, tars host paths from `mustBackup.json`, uploads to storage
+4. hands off via `repository_dispatch` to the next account in `chain.json`
+5. that account pulls the backup (if not using DRBD), restores, runs, and repeats
+6. a scheduled watchdog on every account recovers if a lease goes stale (>45 min)
 
 ## Repo layout
 
 ```
-.github/workflows/vps.yml      # the relay job (timeout 340 min, under the 360 cap)
-.github/workflows/watchdog.yml # cron every 30 min, self-heal on stale lease
-mustBackup.json                # what to back up + tunnel + handoff timing
-chain.json                     # ordered list of accounts in the relay
-Dockerfile                     # the VPS image (pm2, sshd, opencode, cloudflared, docker CLI)
-services/                      # pm2 apps + seed bashrc/opencode/authorized_keys
-scripts/                       # restore / run / loop / backup / handoff / heartbeat / watchdog / lease
-scripts/storage.sh             # storage backends: minio (rclone) + ghrelease (chunked release assets)
+.github/workflows/vps.yml        # the relay job (timeout 340 min, under the 360 cap)
+.github/workflows/watchdog.yml   # cron every 30 min, self-heal on stale lease
+.github/workflows/drbd-trigger.yml # cron every 4h, starts DRBD secondary on next account
+mustBackup.json                  # what to back up + tunnel + handoff timing
+chain.json                       # ordered list of accounts in the relay
+Dockerfile                       # the VPS image (pm2, sshd, opencode, cloudflared, docker CLI)
+services/                        # pm2 apps + seed bashrc/opencode/authorized_keys
+scripts/                         # restore / run / loop / backup / handoff / heartbeat / watchdog / lease
+scripts/storage.sh               # storage backends: minio (rclone) + ghrelease (chunked release assets)
+scripts/drbd-setup.sh            # DRBD setup: loop device, config, mount, promote
 ```
 
 ## 1. Repos
@@ -95,6 +100,52 @@ deleted only **after** the new one has been uploaded and verified, so there is
 never a cycle without a restorable backup. Steady-state usage is ~1x your state
 size.
 
+## 2c. `drbd` — real-time host directory replication (optional)
+
+**DRBD (Distributed Replicated Block Device)** can replicate a host directory
+between the current VPS and the next one **in real time**, so the handoff at
+5 hours is nearly instantaneous — the secondary already has all data.
+
+- **What it syncs:** a configurable host directory (default `/mnt/drbd`) backed
+  by a sparse loop file (default 10 GB, ext4).
+- **Transport:** Cloudflare Zero Trust private network (mesh). Each runner's
+  `cloudflared` tunnel gets a private IP in `100.64.0.0/10`; DRBD replicates
+  over this mesh (port 7789). No public ports needed.
+- **Timing:** a separate cron workflow (`drbd-trigger.yml`) fires at the
+  4-hour mark (60 min before handoff), dispatches `drbd-start` to the next
+  account. The next VPS boots in **secondary** mode, connects to the primary
+  over the CF mesh, and syncs the volume.
+- **Handoff:** at 5 hours the primary promotes DRBD to primary, remounts
+  read-write, does its backup, and exits. The secondary (now primary) continues
+  running with zero data loss.
+- **Watchdog:** respects `drbd_secondary` lease flag — won't boot a competing
+  primary on the secondary's account.
+
+### Enabling DRBD
+
+1. **Cloudflare Zero Trust:** enable **Private Networks** in the dashboard for
+   the tunnel(s) used by the relay. Each tunnel will get a private IP.
+2. Set repo **variables** (Settings → Variables → Actions):
+   - `DRBD_ENABLED` = `true`
+   - `DRBD_SIZE_GB` = `10` (or your desired volume size)
+3. The `CF_TUNNEL_TOKEN` secret must be a tunnel that has private networking
+   enabled (same token works for both primary and secondary).
+4. No extra secrets needed — DRBD uses the existing lease for peer discovery.
+
+### How it works (step by step)
+
+```
+T=0h      VPS A starts (primary), mounts DRBD volume at /mnt/drbd
+T=4h      drbd-trigger on A fires → dispatches drbd-start to B
+T=4h+     VPS B starts (secondary), joins CF mesh, connects to A, syncs
+T=5h      VPS A promotes DRBD → primary, remounts RW, backups, hands off
+T=5h+     VPS B (now primary) continues running, VPS A exits
+```
+
+The `DRBD_SIZE_GB` variable controls the loop file size. The volume is sparse
+so it only consumes space for written data. For most workloads 10–20 GB is
+plenty.
+
 ## 3. Cloudflare tunnel + Access (connectivity)
 
 Two supported modes:
@@ -144,7 +195,8 @@ For **each** account, create a fine-grained PAT in the **next** account's repo
 | `CF_TUNNEL_TOKEN`             | `cloudflared tunnel run --token <TOKEN>` token (token mode) |
 
 Optional repo **variables**: `STORAGE_BACKEND` (`auto`/`ghrelease`/`minio`),
-`CHUNK_BYTES` (default `1610612736` = 1.5 GiB), `MAX_BACKUP_GB` (default `20`).
+`CHUNK_BYTES` (default `1610612736` = 1.5 GiB), `MAX_BACKUP_GB` (default `20`),
+`DRBD_ENABLED` (`true`/`false`, default `false`), `DRBD_SIZE_GB` (default `10`).
 
 ## 6. First boot
 

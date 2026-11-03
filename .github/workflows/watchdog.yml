@@ -26,6 +26,7 @@ jobs:
       STORAGE_BACKEND: ${{ vars.STORAGE_BACKEND || 'auto' }}
       STORAGE_REPO: ${{ secrets.STORAGE_REPO }}
       STORAGE_REPO_PAT: ${{ secrets.STORAGE_REPO_PAT }}
+      DRBD_ENABLED: ${{ vars.DRBD_ENABLED || 'false' }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4

@@ -2,6 +2,8 @@
 # Watchdog: if the MinIO lease is stale (holder died, missed handoff, account
 # hit the 6h kill, etc.) and this repo has no run in progress, acquire the
 # lease and boot our own vps.yml. Runs from watchdog.yml on a schedule.
+# If DRBD secondary is active on this repo, it updates the lease with
+# drbd_secondary=true — watchdog respects this and doesn't boot a new primary.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -14,6 +16,15 @@ log "lease holder='$holder' age=${age}min (timeout ${HOLD_TIMEOUT_MIN}min)"
 
 if [ "$age" -le "$HOLD_TIMEOUT_MIN" ]; then
   log "lease fresh; chain healthy"
+  exit 0
+fi
+
+# Check if a DRBD secondary is active on THIS repo (holder might be different
+# but drbd_secondary flag indicates this repo has a live secondary)
+local lease_json
+lease_json="$(lease_read 2>/dev/null || true)"
+if [ -n "$lease_json" ] && printf '%s' "$lease_json" | jq -e '.drbd_secondary == true' >/dev/null 2>&1; then
+  log "DRBD secondary flag set on this repo; not booting new primary"
   exit 0
 fi
 

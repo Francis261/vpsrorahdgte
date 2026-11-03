@@ -11,8 +11,17 @@ on:
         description: 'Skip Docker backup/restore (saves disk space)'
         type: boolean
         default: false
+      drbd_mode:
+        description: 'DRBD role: primary (default) or secondary'
+        type: choice
+        options: [primary, secondary]
+        default: primary
+      drbd_primary_repo:
+        description: 'Repository of the DRBD primary (for secondary mode)'
+        type: string
+        required: false
   repository_dispatch:
-    types: [handoff]
+    types: [handoff, drbd-start]
 
 concurrency:
   group: vps-relay
@@ -40,6 +49,10 @@ jobs:
       RUN_ID: ${{ github.run_id }}
       SKIP_RESTORE: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_restore || 'false' }}
       SKIP_DOCKER: ${{ (github.event_name == 'workflow_dispatch' && inputs.skip_docker) || vars.SKIP_DOCKER || 'false' }}
+      DRBD_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.drbd_mode || github.event.client_payload.mode || 'primary' }}
+      DRBD_PRIMARY_REPO: ${{ github.event_name == 'workflow_dispatch' && inputs.drbd_primary_repo || github.event.client_payload.primary || '' }}
+      DRBD_ENABLED: ${{ vars.DRBD_ENABLED || 'false' }}
+      DRBD_SIZE_GB: ${{ vars.DRBD_SIZE_GB || '10' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -120,6 +133,18 @@ jobs:
           else
             echo "CF_TUNNEL_TOKEN not set; no tunnel"
           fi
+
+      - name: Setup DRBD (if secondary mode)
+        if: env.DRBD_MODE == 'secondary'
+        run: |
+          echo "DRBD_MODE=secondary, DRBD_PRIMARY_REPO=$DRBD_PRIMARY_REPO"
+          bash scripts/drbd-setup.sh secondary "$DRBD_PRIMARY_REPO"
+
+      - name: Setup DRBD (if primary mode)
+        if: env.DRBD_MODE == 'primary'
+        run: |
+          echo "DRBD_MODE=primary"
+          bash scripts/drbd-setup.sh primary
 
       - name: Start pm2 services
         run: |
