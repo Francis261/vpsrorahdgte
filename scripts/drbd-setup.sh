@@ -275,14 +275,17 @@ setup_primary() {
   write_our_private_ip "$my_ip"
 
   # Wait for secondary to appear in lease (with timeout)
-  log "Waiting for secondary to register..."
+  # Must be a DIFFERENT IP from our own
+  log "Waiting for secondary to register (my IP: $my_ip)..."
   local peer_ip=""
   for i in {1..60}; do
     peer_ip="$(get_peer_private_ip)"
-    [ -n "$peer_ip" ] && [ "$peer_ip" != "null" ] && break
+    if [ -n "$peer_ip" ] && [ "$peer_ip" != "null" ] && [ "$peer_ip" != "$my_ip" ]; then
+      break
+    fi
     sleep 5
   done
-  [ -n "$peer_ip" ] && [ "$peer_ip" != "null" ] || die "Secondary did not register private IP in time"
+  [ -n "$peer_ip" ] && [ "$peer_ip" != "null" ] && [ "$peer_ip" != "$my_ip" ] || die "Secondary did not register different private IP in time (got: '$peer_ip', mine: '$my_ip')"
 
   log "Secondary private IP: $peer_ip"
   generate_drbd_config "$my_ip" "$peer_ip" "primary"
