@@ -53,6 +53,7 @@ jobs:
       DRBD_PRIMARY_REPO: ${{ github.event_name == 'workflow_dispatch' && inputs.drbd_primary_repo || github.event.client_payload.primary || '' }}
       DRBD_ENABLED: ${{ vars.DRBD_ENABLED || 'false' }}
       DRBD_SIZE_GB: ${{ vars.DRBD_SIZE_GB || '10' }}
+      SELF_HANDOFF: ${{ vars.SELF_HANDOFF || 'false' }}
     steps:
       - uses: actions/checkout@v4
 

@@ -196,7 +196,18 @@ For **each** account, create a fine-grained PAT in the **next** account's repo
 
 Optional repo **variables**: `STORAGE_BACKEND` (`auto`/`ghrelease`/`minio`),
 `CHUNK_BYTES` (default `1610612736` = 1.5 GiB), `MAX_BACKUP_GB` (default `20`),
-`DRBD_ENABLED` (`true`/`false`, default `false`), `DRBD_SIZE_GB` (default `10`).
+`DRBD_ENABLED` (`true`/`false`, default `false`), `DRBD_SIZE_GB` (default `10`),
+`SELF_HANDOFF` (`true`/`false`, default `false`) — force self-loop even with `HANDOFF_PAT` set.
+
+## Handoff modes
+
+| Mode | `HANDOFF_PAT` | `SELF_HANDOFF` | Behavior |
+|---|---|---|---|
+| **Multi-account chain** | set | `false` (default) | Dispatches to next repo in `chain.json` |
+| **Single-repo loop** | **not set** | (ignored) | Loops to self using `GITHUB_TOKEN` |
+| **Force self-loop** | set | `true` | Loops to self even though token exists (testing/solo) |
+
+When `HANDOFF_PAT` is not set, the relay automatically enters self-handoff mode — it dispatches `vps.yml` to its own repo using the built-in `GITHUB_TOKEN`. This allows running a single-repo relay without any PAT.
 
 ## 6. First boot
 
