@@ -29,25 +29,25 @@ DRBD_PORT=7789                       # DRBD replication port (over CF mesh)
 log() { printf '[%s] DRBD: %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
 
-# Get our Cloudflare private IP (assigned to the tunnel)
+# Get our Cloudflare private IP (assigned by WARP connector for mesh)
 get_cf_private_ip() {
-  # cloudflared exposes the private IP via the metrics endpoint or we can
-  # derive it from the tunnel's assigned IP. For Zero Trust private network,
-  # each tunnel gets an IP in 100.64.0.0/10.
-  # We'll try to get it from cloudflared's metrics or the interface.
+  # The private mesh IP (100.64.0.0/10) comes from WARP connector, not cloudflared.
+  # cloudflared tunnel provides public hostnames; WARP connector provides mesh.
   local ip
-  # Method 1: check cloudflared metrics endpoint (if enabled)
+
+  # Method 1: check WARP connector interface (CloudflareWARP or similar)
+  ip="$(ip -4 addr show 2>/dev/null | grep -oE '100\.(6[4-9]|[7-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.[0-9]+\.[0-9]+' | head -1)"
+  [ -n "$ip" ] && echo "$ip" && return
+
+  # Method 2: check cloudflared metrics endpoint (if Private Networks enabled on tunnel)
   if ip="$(curl -s -m 5 http://127.0.0.1:43493/metrics 2>/dev/null | grep -oE 'cloudflared_tunnel_private_ip\{[^}]*\} [0-9.]+' | cut -d' ' -f2 | head -1)"; then
     [ -n "$ip" ] && echo "$ip" && return
   fi
-  # Method 2: check the cloudflared interface (tun0 or similar)
-  ip="$(ip -4 addr show 2>/dev/null | grep -oE '100\.[6-9][0-9]\.[0-9]+\.[0-9]+' | head -1)"
+
+  # Method 3: check cloudflared interface (tun0 or similar) - fallback
+  ip="$(ip -4 addr show 2>/dev/null | grep -E 'tun|cf' | grep -oE '100\.[6-9][0-9]\.[0-9]+\.[0-9]+' | head -1)"
   [ -n "$ip" ] && echo "$ip" && return
-  # Method 3: if we have a named tunnel, query Cloudflare API
-  if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
-    # Can't easily get private IP from token alone without API access
-    :
-  fi
+
   return 1
 }
 
@@ -229,7 +229,17 @@ EOF
 # Primary node setup
 setup_primary() {
   local my_ip
-  my_ip="$(get_cf_private_ip)" || die "Cannot determine Cloudflare private IP"
+  my_ip="$(get_cf_private_ip)" || {
+    log "ERROR: Cannot determine Cloudflare private IP (100.64.0.0/10)"
+    log "       This IP comes from the WARP Connector (mesh), not cloudflared tunnel."
+    log "       Required setup:"
+    log "       1. Zero Trust Dashboard -> Networks -> WARP Connector -> Register connector"
+    log "       2. Add token as secret: CF_WARP_TOKEN"
+    log "       3. In workflow, run WARP connector alongside cloudflared:"
+    log "          warp-cli connector new \"\$CF_WARP_TOKEN\" --accept-tos && warp-cli connect"
+    log "       4. Verify: warp-cli --accept-tos status should show 'Connected'"
+    die "Missing private mesh IP"
+  }
   log "Primary node private IP: $my_ip"
 
   # Write our IP to lease for secondary to find
@@ -283,7 +293,17 @@ setup_secondary() {
   fi
 
   local my_ip peer_ip
-  my_ip="$(get_cf_private_ip)" || die "Cannot determine Cloudflare private IP"
+  my_ip="$(get_cf_private_ip)" || {
+    log "ERROR: Cannot determine Cloudflare private IP (100.64.0.0/10)"
+    log "       This IP comes from the WARP Connector (mesh), not cloudflared tunnel."
+    log "       Required setup:"
+    log "       1. Zero Trust Dashboard -> Networks -> WARP Connector -> Register connector"
+    log "       2. Add token as secret: CF_WARP_TOKEN"
+    log "       3. In workflow, run WARP connector alongside cloudflared:"
+    log "          warp-cli connector new \"\$CF_WARP_TOKEN\" --accept-tos && warp-cli connect"
+    log "       4. Verify: warp-cli --accept-tos status should show 'Connected'"
+    die "Missing private mesh IP"
+  }
   log "Secondary node private IP: $my_ip"
 
   # Get primary's private IP from lease (primary writes it)
