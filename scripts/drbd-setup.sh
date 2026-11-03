@@ -167,6 +167,19 @@ install_drbd() {
   log "DRBD installed"
 }
 
+# Install warp-cli if not present
+install_warp_cli() {
+  if command -v warp-cli >/dev/null 2>&1; then
+    log "warp-cli already installed"
+    return
+  fi
+  log "Installing warp-cli..."
+  curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+  echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+  sudo apt-get update -qq && sudo apt-get install -y -qq cloudflare-warp >/dev/null
+  log "warp-cli installed"
+}
+
 # Create backing file and loop device
 setup_backing_file() {
   if [ -b "$(losetup -j "$DRBD_BACKING_FILE" 2>/dev/null | cut -d: -f1 | head -1)" ]; then
@@ -228,6 +241,7 @@ EOF
 
 # Primary node setup
 setup_primary() {
+  install_warp_cli
   local my_ip
   my_ip="$(get_cf_private_ip)" || {
     log "ERROR: Cannot determine Cloudflare private IP (100.64.0.0/10)"
@@ -291,6 +305,8 @@ setup_secondary() {
   if [ -z "$DRBD_PRIMARY_REPO" ]; then
     die "DRBD_PRIMARY_REPO not set for secondary mode"
   fi
+
+  install_warp_cli
 
   local my_ip peer_ip
   my_ip="$(get_cf_private_ip)" || {

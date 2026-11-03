@@ -33,6 +33,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       HANDOFF_PAT: ${{ secrets.HANDOFF_PAT }}
       DRBD_ENABLED: ${{ vars.DRBD_ENABLED || 'false' }}
+      CF_WARP_TOKEN: ${{ secrets.CF_WARP_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 

@@ -46,6 +46,7 @@ jobs:
       MAX_BACKUP_GB: ${{ vars.MAX_BACKUP_GB || '20' }}
       HANDOFF_PAT: ${{ secrets.HANDOFF_PAT }}
       CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
+      CF_WARP_TOKEN: ${{ secrets.CF_WARP_TOKEN }}
       RUN_ID: ${{ github.run_id }}
       SKIP_RESTORE: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_restore || 'false' }}
       SKIP_DOCKER: ${{ (github.event_name == 'workflow_dispatch' && inputs.skip_docker) || vars.SKIP_DOCKER || 'false' }}
@@ -134,6 +135,22 @@ jobs:
           else
             echo "CF_TUNNEL_TOKEN not set; no tunnel"
           fi
+
+      - name: Start WARP connector (private mesh for DRBD)
+        if: env.DRBD_ENABLED == 'true'
+        env:
+          CF_WARP_TOKEN: ${{ secrets.CF_WARP_TOKEN }}
+        run: |
+          echo "Installing warp-cli..."
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt-get update && sudo apt-get install -y cloudflare-warp
+          
+          echo "Starting WARP connector for DRBD mesh..."
+          warp-cli connector new "$CF_WARP_TOKEN" --accept-tos
+          warp-cli connect
+          echo "WARP connector status:"
+          warp-cli --accept-tos status
 
       - name: Setup DRBD (if secondary mode)
         if: env.DRBD_MODE == 'secondary'

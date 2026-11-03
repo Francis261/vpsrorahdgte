@@ -27,6 +27,7 @@ jobs:
       STORAGE_REPO: ${{ secrets.STORAGE_REPO }}
       STORAGE_REPO_PAT: ${{ secrets.STORAGE_REPO_PAT }}
       DRBD_ENABLED: ${{ vars.DRBD_ENABLED || 'false' }}
+      CF_WARP_TOKEN: ${{ secrets.CF_WARP_TOKEN }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
