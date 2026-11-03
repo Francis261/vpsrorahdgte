@@ -139,13 +139,13 @@ jobs:
         if: env.DRBD_MODE == 'secondary'
         run: |
           echo "DRBD_MODE=secondary, DRBD_PRIMARY_REPO=$DRBD_PRIMARY_REPO"
-          bash scripts/drbd-setup.sh secondary "$DRBD_PRIMARY_REPO"
+          sudo bash scripts/drbd-setup.sh secondary "$DRBD_PRIMARY_REPO"
 
       - name: Setup DRBD (if primary mode)
         if: env.DRBD_MODE == 'primary'
         run: |
           echo "DRBD_MODE=primary"
-          bash scripts/drbd-setup.sh primary
+          sudo bash scripts/drbd-setup.sh primary
 
       - name: Start pm2 services
         run: |

@@ -162,8 +162,8 @@ install_drbd() {
   fi
   log "Installing DRBD..."
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq && apt-get install -y -qq drbd-utils >/dev/null
-  modprobe drbd || true
+  sudo apt-get update -qq && sudo apt-get install -y -qq drbd-utils >/dev/null
+  sudo modprobe drbd || true
   log "DRBD installed"
 }
 
@@ -174,10 +174,10 @@ setup_backing_file() {
     return
   fi
   log "Creating $DRBD_SIZE_GB GB sparse backing file at $DRBD_BACKING_FILE"
-  mkdir -p "$(dirname "$DRBD_BACKING_FILE")"
-  truncate -s "${DRBD_SIZE_GB}G" "$DRBD_BACKING_FILE"
+  sudo mkdir -p "$(dirname "$DRBD_BACKING_FILE")"
+  sudo truncate -s "${DRBD_SIZE_GB}G" "$DRBD_BACKING_FILE"
   local loopdev
-  loopdev="$(losetup -f --show "$DRBD_BACKING_FILE")"
+  loopdev="$(sudo losetup -f --show "$DRBD_BACKING_FILE")"
   log "Attached backing file to $loopdev"
 }
 
@@ -187,10 +187,13 @@ generate_drbd_config() {
   local peer_ip="$2"
   local my_role="$3"  # primary or secondary
 
-  cat > /etc/drbd.d/${DRBD_RESOURCE}.res <<EOF
+  local loopdev
+  loopdev="$(losetup -j "$DRBD_BACKING_FILE" | cut -d: -f1 | head -1)"
+
+  sudo tee /etc/drbd.d/${DRBD_RESOURCE}.res >/dev/null <<EOF
 resource ${DRBD_RESOURCE} {
   device    ${DRBD_DEVICE};
-  disk      $(losetup -j "$DRBD_BACKING_FILE" | cut -d: -f1 | head -1);
+  disk      ${loopdev};
   meta-disk internal;
 
   on $(hostname) {
@@ -246,11 +249,11 @@ setup_primary() {
   generate_drbd_config "$my_ip" "$peer_ip" "primary"
 
   # Initialize DRBD metadata
-  drbdadm create-md "${DRBD_RESOURCE}" || die "create-md failed"
-  drbdadm up "${DRBD_RESOURCE}" || die "drbdadm up failed"
+  sudo drbdadm create-md "${DRBD_RESOURCE}" || die "create-md failed"
+  sudo drbdadm up "${DRBD_RESOURCE}" || die "drbdadm up failed"
 
   # Promote to primary (force if needed)
-  drbdadm primary --force "${DRBD_RESOURCE}" || die "primary promotion failed"
+  sudo drbdadm primary --force "${DRBD_RESOURCE}" || die "primary promotion failed"
 
   # Wait for sync to start (we're primary, so we're the source)
   log "Waiting for DRBD sync to start..."
@@ -262,14 +265,14 @@ setup_primary() {
   done
 
   # Format filesystem (only on first run - check if already formatted)
-  if ! blkid "${DRBD_DEVICE}" >/dev/null 2>&1; then
+  if ! sudo blkid "${DRBD_DEVICE}" >/dev/null 2>&1; then
     log "Formatting DRBD device with ext4"
-    mkfs.ext4 -F "${DRBD_DEVICE}" || die "mkfs failed"
+    sudo mkfs.ext4 -F "${DRBD_DEVICE}" || die "mkfs failed"
   fi
 
   # Mount
-  mkdir -p "${DRBD_MOUNT}"
-  mount "${DRBD_DEVICE}" "${DRBD_MOUNT}" || die "mount failed"
+  sudo mkdir -p "${DRBD_MOUNT}"
+  sudo mount "${DRBD_DEVICE}" "${DRBD_MOUNT}" || die "mount failed"
   log "DRBD primary ready at ${DRBD_MOUNT}"
 }
 
@@ -292,14 +295,14 @@ setup_secondary() {
   generate_drbd_config "$my_ip" "$peer_ip" "secondary"
 
   # Initialize DRBD metadata
-  drbdadm create-md "${DRBD_RESOURCE}" || die "create-md failed"
-  drbdadm up "${DRBD_RESOURCE}" || die "drbdadm up failed"
+  sudo drbdadm create-md "${DRBD_RESOURCE}" || die "create-md failed"
+  sudo drbdadm up "${DRBD_RESOURCE}" || die "drbdadm up failed"
 
   # Wait for connection and sync
   log "Waiting for DRBD connection to primary..."
   for i in {1..120}; do
     local conn_state
-    conn_state="$(drbdadm status "${DRBD_RESOURCE}" 2>/dev/null | grep -oE 'Connected|WFConnection' | head -1 || true)"
+    conn_state="$(sudo drbdadm status "${DRBD_RESOURCE}" 2>/dev/null | grep -oE 'Connected|WFConnection' | head -1 || true)"
     [ "$conn_state" = "Connected" ] && break
     sleep 5
   done
@@ -307,15 +310,15 @@ setup_secondary() {
   log "Connected to primary. Waiting for sync..."
   for i in {1..600}; do  # up to 50 min for 10GB at 100M/s
     local disk_state
-    disk_state="$(drbdadm status "${DRBD_RESOURCE}" 2>/dev/null | grep -oE 'UpToDate|SyncTarget' | head -1 || true)"
+    disk_state="$(sudo drbdadm status "${DRBD_RESOURCE}" 2>/dev/null | grep -oE 'UpToDate|SyncTarget' | head -1 || true)"
     [ "$disk_state" = "UpToDate" ] && break
-    [ "$disk_state" = "SyncTarget" ] && log "Syncing... ($(drbdadm status "${DRBD_RESOURCE}" | grep -oE '[0-9]+%' | head -1))"
+    [ "$disk_state" = "SyncTarget" ] && log "Syncing... ($(sudo drbdadm status "${DRBD_RESOURCE}" | grep -oE '[0-9]+%' | head -1))"
     sleep 5
   done
 
   # Mount read-only initially (will be promoted on handoff)
-  mkdir -p "${DRBD_MOUNT}"
-  mount -o ro "${DRBD_DEVICE}" "${DRBD_MOUNT}" || die "mount failed"
+  sudo mkdir -p "${DRBD_MOUNT}"
+  sudo mount -o ro "${DRBD_DEVICE}" "${DRBD_MOUNT}" || die "mount failed"
   log "DRBD secondary ready at ${DRBD_MOUNT} (read-only, synced)"
 
   # Update lease to show secondary is ready (prevents watchdog from booting new primary)
@@ -330,9 +333,9 @@ setup_secondary() {
 # Promote secondary to primary (called during handoff)
 promote_to_primary() {
   log "Promoting DRBD secondary to primary..."
-  drbdadm primary "${DRBD_RESOURCE}" || die "promotion failed"
+  sudo drbdadm primary "${DRBD_RESOURCE}" || die "promotion failed"
   # Remount read-write
-  mount -o remount,rw "${DRBD_MOUNT}" || die "remount rw failed"
+  sudo mount -o remount,rw "${DRBD_MOUNT}" || die "remount rw failed"
   log "DRBD promoted to primary, mounted read-write at ${DRBD_MOUNT}"
 }
 
