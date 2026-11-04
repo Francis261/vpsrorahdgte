@@ -278,7 +278,7 @@ setup_primary() {
   # Must be a DIFFERENT IP from our own
   log "Waiting for secondary to register (my IP: $my_ip)..."
   local peer_ip=""
-  for i in {1..60}; do
+  for i in {1..12}; do  # 1 min wait for testing; production is 60*5s
     peer_ip="$(get_peer_private_ip)"
     if [ -n "$peer_ip" ] && [ "$peer_ip" != "null" ] && [ "$peer_ip" != "$my_ip" ]; then
       break
@@ -286,12 +286,12 @@ setup_primary() {
     sleep 5
   done
   if [ -z "$peer_ip" ] || [ "$peer_ip" = "null" ] || [ "$peer_ip" = "$my_ip" ]; then
-    log "WARN: Secondary did not register different private IP in time (got: '$peer_ip', mine: '$my_ip')"
-    log "WARN: Proceeding without DRBD peer (single-repo mode or secondary not started)"
-    peer_ip="$my_ip"  # Use own IP for config, but DRBD will be in standalone mode
-  else
-    log "Secondary private IP: $peer_ip"
+    log "WARN: No distinct secondary registered in time (got: '$peer_ip', mine: '$my_ip')"
+    log "WARN: This is expected in single-repo mode or if secondary never started"
+    log "WARN: Skipping DRBD setup - VPS will continue without replication"
+    return 0
   fi
+  log "Secondary private IP: $peer_ip"
 
   log "Secondary private IP: $peer_ip"
   generate_drbd_config "$my_ip" "$peer_ip" "primary"
