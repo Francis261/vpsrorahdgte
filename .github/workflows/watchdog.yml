@@ -28,6 +28,8 @@ jobs:
       STORAGE_REPO_PAT: ${{ secrets.STORAGE_REPO_PAT }}
       DRBD_ENABLED: ${{ vars.DRBD_ENABLED || 'false' }}
       CF_WARP_TOKEN: ${{ secrets.CF_WARP_TOKEN }}
+      SELF_HANDOFF: ${{ vars.SELF_HANDOFF || 'false' }}
+      VPS_BRANCH: ${{ vars.VPS_BRANCH || '' }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4

@@ -30,19 +30,31 @@ while true; do
     touch "$DRBD_DISABLED_FILE"
     log "DRBD trigger time reached (${ELAPSED} min elapsed); starting secondary on next account"
     self="$(self_repo)"; next="$(next_repo "$self")"
-    if [ -n "${HANDOFF_PAT:-}" ]; then
+    # Prefer explicit branch (VPS_BRANCH) so the secondary runs the same
+    # branch code (e.g. vps4) instead of defaulting to main (GDrive).
+    ref="${VPS_BRANCH:-}"
+    dispatched=0
+    if [ -n "$ref" ]; then
+      if gh workflow run vps.yml --repo "$next" --ref "$ref" \
+            -f drbd_mode=secondary -f drbd_primary_repo="$self" 2>/dev/null; then
+        log "dispatched drbd-start to $next @ $ref"; dispatched=1
+      fi
+    fi
+    if [ "$dispatched" = "0" ] && gh workflow run vps.yml --repo "$next" \
+          -f drbd_mode=secondary -f drbd_primary_repo="$self" 2>/dev/null; then
+      log "dispatched drbd-start to $next (default branch)"; dispatched=1
+    fi
+    if [ "$dispatched" = "0" ] && [ -n "${HANDOFF_PAT:-}" ]; then
       curl -fsS -X POST \
         -H "Authorization: Bearer $HANDOFF_PAT" \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "https://api.github.com/repos/$next/dispatches" \
         -d "{\"event_type\":\"drbd-start\",\"client_payload\":{\"primary\":\"$self\",\"mode\":\"secondary\"}}" \
-        && log "dispatched drbd-start to $next" || log "WARN: drbd dispatch failed"
-    else
-      # self-handoff: dispatch locally
-      gh workflow run vps.yml --repo "$self" -f drbd_mode=secondary -f drbd_primary_repo="$self" 2>/dev/null \
-        && log "dispatched drbd-start to self ($next)" || log "WARN: self drbd dispatch failed"
+        && log "dispatched drbd-start to $next via repository_dispatch (lands on default branch)" && dispatched=1
     fi
+    if [ "$dispatched" = "0" ]; then
+      log "WARN: drbd dispatch failed (no repo-admin access)"; fi
   fi
 
   if [ "$ELAPSED" -ge "$HANDOFF_AT_MIN" ]; then

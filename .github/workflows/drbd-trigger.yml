@@ -33,6 +33,7 @@ jobs:
       HANDOFF_PAT: ${{ secrets.HANDOFF_PAT }}
       DRBD_ENABLED: ${{ vars.DRBD_ENABLED || 'false' }}
       CF_WARP_TOKEN: ${{ secrets.CF_WARP_TOKEN }}
+      VPS_BRANCH: ${{ vars.VPS_BRANCH || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -71,11 +72,28 @@ jobs:
           source scripts/lib.sh
           next="$(next_repo "$(self_repo)")"
           echo "Dispatching drbd-start to $next"
-          gh workflow run vps.yml --repo "$next" -f drbd_mode=secondary -f drbd_primary_repo="$(self_repo)" 2>/dev/null || \
-          curl -fsS -X POST \
-            -H "Authorization: Bearer ${HANDOFF_PAT}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$next/dispatches" \
-            -d "{\"event_type\":\"drbd-start\",\"client_payload\":{\"primary\":\"$(self_repo)\",\"mode\":\"secondary\"}}"
-          echo "DRBD start dispatched to $next"
+          REF="${VPS_BRANCH:-}"
+          ok=0
+          if [ -n "$REF" ]; then
+            if gh workflow run vps.yml --repo "$next" --ref "$REF" \
+              -f drbd_mode=secondary -f drbd_primary_repo="$(self_repo)" 2>/dev/null; then
+              echo "drbd-start dispatched to $next @ $REF via gh"
+              ok=1
+            fi
+          else
+            if gh workflow run vps.yml --repo "$next" \
+              -f drbd_mode=secondary -f drbd_primary_repo="$(self_repo)" 2>/dev/null; then
+              echo "drbd-start dispatched to $next (default branch) via gh"
+              ok=1
+            fi
+          fi
+          if [ "$ok" = "0" ]; then
+            echo "gh workflow dispatch failed; falling back to repository_dispatch (lands on default branch)"
+            curl -fsS -X POST \
+              -H "Authorization: Bearer ${HANDOFF_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$next/dispatches" \
+              -d "{\"event_type\":\"drbd-start\",\"client_payload\":{\"primary\":\"$(self_repo)\",\"mode\":\"secondary\"}}" \
+              && echo "drbd-start dispatched to $next via repository_dispatch"
+          fi

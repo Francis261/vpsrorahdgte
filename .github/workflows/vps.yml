@@ -55,6 +55,7 @@ jobs:
       DRBD_ENABLED: ${{ vars.DRBD_ENABLED || 'false' }}
       DRBD_SIZE_GB: ${{ vars.DRBD_SIZE_GB || '10' }}
       SELF_HANDOFF: ${{ vars.SELF_HANDOFF || 'false' }}
+      VPS_BRANCH: ${{ vars.VPS_BRANCH || '' }}
     steps:
       - uses: actions/checkout@v4
 
