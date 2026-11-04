@@ -78,7 +78,7 @@ get_peer_private_ip() {
 # Write our private IP to the lease for the peer to find
 write_our_private_ip() {
   local ip="$1"
-  local lf=/tmp/lease-write.json
+  local lf; lf="$(mktemp /tmp/lease-write.XXXXXX.json)"
   local cur
   cur="$(lease_read 2>/dev/null || true)"
   local holder since hb next run
@@ -90,8 +90,11 @@ write_our_private_ip() {
   [ -n "$since" ] || since="$(now_iso)"
   jq -n --arg h "$holder" --arg s "$since" --arg hb "$(now_iso)" \
     --arg n "$next" --arg r "$run" --arg ip "$ip" \
-    '{holder:$h,since:$s,heartbeat:$hb,next:$n,run_id:$r,cf_private_ip:$ip}' > "$lf"
+    '{holder:$h,since:$s,heartbeat:$hb,next:$n,run_id:$r,cf_private_ip:$ip}' > "$lf" || { rm -f "$lf"; return 1; }
   lease_upload "$lf"
+  local rc=$?
+  rm -f "$lf"
+  return $rc
 }
 
 # Test mesh connectivity and print private IP info
@@ -382,11 +385,14 @@ setup_secondary() {
   log "DRBD secondary ready at ${DRBD_MOUNT} (read-only, synced)"
 
   # Update lease to show secondary is ready (prevents watchdog from booting new primary)
-  local lf=/tmp/lease-write.json
+  local lf; lf="$(mktemp /tmp/lease-write.XXXXXX.json)"
   jq -n --arg h "$(self_repo)" --arg s "$(now_iso)" --arg hb "$(now_iso)" \
     --arg n "$(next_repo "$(self_repo)")" --arg r "${RUN_ID:-}" \
     '{holder:$h,since:$s,heartbeat:$hb,next:$n,run_id:$r,drbd_secondary:true}' > "$lf"
   lease_upload "$lf"
+  local rc=$?
+  rm -f "$lf"
+  [ "$rc" -eq 0 ] || log "WARN: secondary lease_write upload failed ($rc)"
   log "Lease updated: DRBD secondary ready on $(self_repo)"
 }
 

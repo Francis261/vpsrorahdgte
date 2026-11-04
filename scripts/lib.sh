@@ -87,18 +87,24 @@ lease_read() { case "$(storage_backend)" in
 esac; }
 
 lease_write() {
-  local lf=/tmp/lease-write.json
+  local lf; lf="$(mktemp /tmp/lease-write.XXXXXX.json)"
   jq -n --arg h "$1" --arg s "$2" --arg hb "$3" --arg n "$4" --arg r "$5" \
-    '{holder:$h,since:$s,heartbeat:$hb,next:$n,run_id:$r}' > "$lf"
-  case "$(storage_backend)" in
-    ghrelease) ghrelease_lease_write "$lf" ;;
-    minio)     minio_lease_write "$lf" ;;
-  esac
+    '{holder:$h,since:$s,heartbeat:$hb,next:$n,run_id:$r}' > "$lf" || {
+      rm -f "$lf"; return 1
+    }
+  ( case "$(storage_backend)" in
+      ghrelease) ghrelease_lease_write "$lf" ;;
+      minio)     minio_lease_write "$lf" ;;
+    esac )
+  local rc=$?
+  rm -f "$lf"
+  return $rc
 }
 
 # Upload a pre-built lease JSON file (used by DRBD setup)
 lease_upload() {
-  local lf="$1"
+  local lf="${1:-}"
+  [ -n "$lf" ] && [ -f "$lf" ] || return 1
   case "$(storage_backend)" in
     ghrelease) ghrelease_lease_write "$lf" ;;
     minio)     minio_lease_write "$lf" ;;
@@ -124,12 +130,15 @@ lease_touch() {
   next="$(printf '%s' "$cur" | jq -r '.next // ""')"
   drbd_sec="$(printf '%s' "$cur" | jq -r '.drbd_secondary // false')"
   [ -n "$since" ] || since="$(now_iso)"
-  local lf=/tmp/lease-write.json
+  local lf; lf="$(mktemp /tmp/lease-write.XXXXXX.json)"
   jq -n --arg h "$holder" --arg s "$since" --arg hb "$(now_iso)" \
     --arg n "$next" --arg r "$run_id" --argjson d "$drbd_sec" \
-    '{holder:$h,since:$s,heartbeat:$hb,next:$n,run_id:$r,drbd_secondary:$d}' > "$lf"
+    '{holder:$h,since:$s,heartbeat:$hb,next:$n,run_id:$r,drbd_secondary:$d}' > "$lf" || { rm -f "$lf"; return 1; }
   case "$(storage_backend)" in
     ghrelease) ghrelease_lease_write "$lf" ;;
     minio)     minio_lease_write "$lf" ;;
   esac
+  local rc=$?
+  rm -f "$lf"
+  return $rc
 }
