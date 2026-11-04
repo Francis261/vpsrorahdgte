@@ -3,9 +3,8 @@ name: DRBD Sync Trigger
 on:
   schedule:
     # Runs at 240 minutes (4 hours) after the hour — aligns with VPS handoff at 300 min
-    - cron: '0 */4 * * *'   # every 4 hours at minute 0 (00:00, 04:00, 08:00, ...)
-    # Alternative: run 60 min before handoff if handoff_after_min=300
-    # - cron: '0 4,8,12,16,20 * * *'  # at 4h, 8h, etc.
+    schedule:
+    - cron: '* * * * *'   # every minute for test; in prod use '0 */4 * * *'
   workflow_dispatch:
     inputs:
       force:

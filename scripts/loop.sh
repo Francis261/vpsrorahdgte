@@ -6,8 +6,15 @@ set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 HANDOFF_AT_MIN="$(handoff_after_min)"
-log "VPS loop active; handoff scheduled at ${HANDOFF_AT_MIN} min"
+# DRBD trigger window: min(60, handoff/2) minutes before handoff so even fast tests fire
+DRBD_MARGIN_MIN=60; [ "$HANDOFF_AT_MIN" -lt 120 ] && DRBD_MARGIN_MIN=$(( HANDOFF_AT_MIN / 2 ))
+[ "$DRBD_MARGIN_MIN" -lt 1 ] && DRBD_MARGIN_MIN=1
+DRBD_TRIGGER_AT_MIN=$(( HANDOFF_AT_MIN - DRBD_MARGIN_MIN ))
+[ "$DRBD_TRIGGER_AT_MIN" -lt 1 ] && DRBD_TRIGGER_AT_MIN=1
+log "VPS loop active; handoff scheduled at ${HANDOFF_AT_MIN} min, DRBD trigger at ${DRBD_TRIGGER_AT_MIN} min"
 START="$(now_epoch)"
+DRBD_TRIGGERED=0
+DRBD_DISABLED_FILE=/tmp/drbd-processed
 
 while true; do
   ELAPSED=$(( ( $(now_epoch) - START) / 60 ))
@@ -16,6 +23,26 @@ while true; do
   if [ "$ELAPSED" -gt 0 ] && [ $((ELAPSED % 5)) -eq 0 ]; then
     pm2 ping 2>/dev/null || log "WARN: pm2 not responding"
     docker info >/dev/null 2>&1 || log "WARN: docker not responding"
+  fi
+
+  # DRBD trigger at configured minute (idempotent: only fires once per run)
+  if [ "${DRBD_ENABLED:-false}" = "true" ] && [ "$ELAPSED" -ge "$DRBD_TRIGGER_AT_MIN" ] && [ ! -f "$DRBD_DISABLED_FILE" ]; then
+    touch "$DRBD_DISABLED_FILE"
+    log "DRBD trigger time reached (${ELAPSED} min elapsed); starting secondary on next account"
+    self="$(self_repo)"; next="$(next_repo "$self")"
+    if [ -n "${HANDOFF_PAT:-}" ]; then
+      curl -fsS -X POST \
+        -H "Authorization: Bearer $HANDOFF_PAT" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "https://api.github.com/repos/$next/dispatches" \
+        -d "{\"event_type\":\"drbd-start\",\"client_payload\":{\"primary\":\"$self\",\"mode\":\"secondary\"}}" \
+        && log "dispatched drbd-start to $next" || log "WARN: drbd dispatch failed"
+    else
+      # self-handoff: dispatch locally
+      gh workflow run vps.yml --repo "$self" -f drbd_mode=secondary -f drbd_primary_repo="$self" 2>/dev/null \
+        && log "dispatched drbd-start to self ($next)" || log "WARN: self drbd dispatch failed"
+    fi
   fi
 
   if [ "$ELAPSED" -ge "$HANDOFF_AT_MIN" ]; then
