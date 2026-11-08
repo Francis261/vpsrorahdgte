@@ -37,6 +37,8 @@ jobs:
       MAX_BACKUP_GB: ${{ vars.MAX_BACKUP_GB || '20' }}
       HANDOFF_PAT: ${{ secrets.HANDOFF_PAT }}
       CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      VPS_BRANCH: ${{ vars.VPS_BRANCH || '' }}
       RUN_ID: ${{ github.run_id }}
       SKIP_RESTORE: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_restore || 'false' }}
       SKIP_DOCKER: ${{ (github.event_name == 'workflow_dispatch' && inputs.skip_docker) || vars.SKIP_DOCKER || 'false' }}
