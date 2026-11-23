@@ -27,6 +27,9 @@ jobs:
       STORAGE_REPO: ${{ secrets.STORAGE_REPO }}
       STORAGE_REPO_PAT: ${{ secrets.STORAGE_REPO_PAT }}
       GH_TOKEN: ${{ github.token }}
+      # Boot the same branch the relay runs on, otherwise recovery silently
+      # falls back to main and drops the vps3 fixes.
+      VPS_BRANCH: ${{ vars.VPS_BRANCH || 'main' }}
     steps:
       - uses: actions/checkout@v4
 

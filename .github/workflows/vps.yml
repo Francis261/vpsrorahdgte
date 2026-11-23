@@ -21,7 +21,10 @@ concurrency:
 jobs:
   vps:
     runs-on: ubuntu-latest
-    timeout-minutes: 340
+    # Max window a GitHub-hosted runner allows. The hold + backup + upload
+    # have to fit inside it — loop.sh caps the hold so the backup always gets
+    # its reserved slice (BACKUP_BUDGET_MIN).
+    timeout-minutes: 360
     permissions:
       contents: read
     env:
@@ -34,7 +37,7 @@ jobs:
       STORAGE_REPO: ${{ secrets.STORAGE_REPO }}
       STORAGE_REPO_PAT: ${{ secrets.STORAGE_REPO_PAT }}
       CHUNK_BYTES: ${{ vars.CHUNK_BYTES || '1610612736' }}
-      MAX_BACKUP_GB: ${{ vars.MAX_BACKUP_GB || '20' }}
+      MAX_BACKUP_GB: ${{ vars.MAX_BACKUP_GB || '50' }}
       HANDOFF_PAT: ${{ secrets.HANDOFF_PAT }}
       CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
       GH_TOKEN: ${{ github.token }}
@@ -42,8 +45,14 @@ jobs:
       RUN_ID: ${{ github.run_id }}
       SKIP_RESTORE: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_restore || 'false' }}
       SKIP_DOCKER: ${{ (github.event_name == 'workflow_dispatch' && inputs.skip_docker) || vars.SKIP_DOCKER || 'false' }}
+      # must stay in sync with timeout-minutes above
+      JOB_TIMEOUT_MIN: '360'
+      BACKUP_BUDGET_MIN: ${{ vars.BACKUP_BUDGET_MIN || '45' }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Record job start
+        run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
 
       - name: Free disk space
         run: |

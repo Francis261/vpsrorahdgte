@@ -24,10 +24,18 @@ fi
 
 log "lease stale; acquiring and booting self"
 lease_write "$self" "$(now_iso)" "$(now_iso)" "" "${RUN_ID:-}"
-gh workflow run vps.yml --repo "$self" 2>/dev/null || \
+
+# Boot the branch the relay is running on — hardcoding "main" here would
+# silently drop the vps3 fixes after every failed cycle.
+REF="${VPS_BRANCH:-main}"
+log "booting vps.yml on $self @ $REF"
+if gh workflow run vps.yml --repo "$self" --ref "$REF" 2>/dev/null; then
+  log "vps.yml dispatched on $self @ $REF"
+else
   curl -fsS -X POST \
     -H "Authorization: Bearer ${GH_TOKEN:-$GITHUB_TOKEN}" \
     -H "Accept: application/vnd.github+json" \
     "https://api.github.com/repos/$self/actions/workflows/vps.yml/dispatches" \
-    -d '{"ref":"main"}'
-log "vps.yml booted on $self"
+    -d "{\"ref\":\"$REF\"}" && log "vps.yml dispatched on $self @ $REF (api)" || \
+    log "WARN: could not boot vps.yml on $self @ $REF"
+fi
