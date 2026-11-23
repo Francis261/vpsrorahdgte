@@ -16,7 +16,7 @@ GitHub-hosted runners are hard-killed at 6 hours, so this repo:
 ## Repo layout
 
 ```
-.github/workflows/vps.yml      # the relay job (timeout 340 min, under the 360 cap)
+.github/workflows/vps.yml      # the relay job (timeout 360 min — the cap for a hosted runner)
 .github/workflows/watchdog.yml # cron every 30 min, self-heal on stale lease
 mustBackup.json                # what to back up + tunnel + handoff timing
 chain.json                     # ordered list of accounts in the relay
@@ -68,7 +68,7 @@ garbage-collects after `STORAGE_KEEP_DRAFT_HOURS` (default 2). The lease lives
 in the body of a permanent `state` release (1 GET to read, 1 PATCH per
 heartbeat). Guards: `MAX_CHUNKS=998` (GitHub allows 1000 assets/release),
 `CHUNK_BYTES=1610612736` (1.5 GiB — GitHub caps each asset at 2 GiB) and
-`MAX_BACKUP_GB=20` (refuse rather than blow the 6h job window).
+`MAX_BACKUP_GB=50` (refuse rather than blow the 6h job window).
 
 ### 2b. `minio` — any S3-compatible endpoint
 
@@ -144,7 +144,9 @@ For **each** account, create a fine-grained PAT in the **next** account's repo
 | `CF_TUNNEL_TOKEN`             | `cloudflared tunnel run --token <TOKEN>` token (token mode) |
 
 Optional repo **variables**: `STORAGE_BACKEND` (`auto`/`ghrelease`/`minio`),
-`CHUNK_BYTES` (default `1610612736` = 1.5 GiB), `MAX_BACKUP_GB` (default `20`).
+`CHUNK_BYTES` (default `1610612736` = 1.5 GiB), `MAX_BACKUP_GB` (default `50`),
+`VPS_BRANCH` (branch the relay and the watchdog boot), `BACKUP_BUDGET_MIN` (default `45`,
+the slice of the job window reserved for backup + upload).
 
 ## 6. First boot
 
@@ -180,9 +182,14 @@ they persist across handoffs because they live in the committed container).
 ## Operations
 
 - **Backup config**: edit `mustBackup.json` — `containers` (commit+save), `host_paths`
-  (extra files on the runner), `handoff_after_min` (default 300, keep < 330).
-- **Timing**: boot ~5 min + run 300 min + backup ~5 min + handoff ~1 min → clean
-  exit ~311 min, ~49 min before the 360-min hard kill.
+  (extra files on the runner), `handoff_after_min` (default 270, keep < 315).
+- **Timing**: boot ~10 min + run 270 min + backup ~15 min + handoff ~1 min → clean
+  exit ~296 min, ~64 min before the 360-min hard kill.
+- **The hold is not fixed**: `loop.sh` caps it at
+  `job deadline − BACKUP_BUDGET_MIN`, so a slow restore shortens the hold
+  instead of letting the job be killed mid-backup. `backup.sh` additionally
+  skips (loudly) any step it has no time left for, and writes archives to
+  `.part` so a killed tar can never leave a corrupt one behind.
 - **Crash / missed handoff**: the watchdog on the next account detects the stale
   lease (no heartbeat > 45 min) and boots from the last-good backup.
 - **SSH into the current runner** for debugging: each account's vps run logs the
