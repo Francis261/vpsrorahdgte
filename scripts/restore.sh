@@ -111,7 +111,14 @@ else
       # One-step cleanup: strip the legacy "backup-" prefix so the image ends up
       # named exactly like the container (backup-backup-storage -> backup-storage).
       if [ -n "$IMAGE" ] && [ "$IMAGE" != "$c" ]; then
-        if docker tag "$IMAGE" "$c" 2>/dev/null; then
+        ours=yes
+        if docker image inspect "$c" >/dev/null 2>&1 \
+           && [ "$(docker image inspect -f '{{index .Config.Labels "io.vps-relay.backup"}}' "$c" 2>/dev/null)" != "1" ]; then
+          ours=no   # an unrelated image already owns that name — don't clobber it
+        fi
+        if [ "$ours" = "no" ]; then
+          log "note: image '$c' belongs to someone else — keeping legacy tag $IMAGE"
+        elif docker tag "$IMAGE" "$c" 2>/dev/null; then
           log "renamed image $IMAGE -> $c"
           docker rmi "$IMAGE" 2>/dev/null || true
           IMAGE="$c"
