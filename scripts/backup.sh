@@ -24,20 +24,48 @@ LEFT="$(time_left_sec "$DEADLINE")"
 log "backup starting (time left: $(( LEFT / 60 )) min)"
 
 # ── 1. PM2 process list ─────────────────────────────────────────────────────
+# Robust by design:
+#   * save for BOTH the invoking user and root (state lives in different homes)
+#   * keep the dump with the MOST processes (root's vs runner's differ)
+#   * validate the dump is a JSON array before trusting it
+#   * also store `pm2 jlist` output as a fallback source for restore
 if command -v pm2 &>/dev/null; then
-  pm2 save 2>/dev/null || true
-  PM2_DUMP=""
-  for p in "/root/.pm2/dump.pm2" "$HOME/.pm2/dump.pm2" "/home/runner/.pm2/dump.pm2"; do
-    if [ -f "$p" ]; then
-      PM2_DUMP="$p"
-      break
+  pm2 save >/dev/null 2>&1 || true
+  sudo pm2 save >/dev/null 2>&1 || true
+
+  pm2 jlist > "$STAGE/pm2-procs.json" 2>/dev/null || true
+  if sudo pm2 jlist > "$STAGE/pm2-procs-root.json" 2>/dev/null; then
+    n_user="$(jq -r 'if type=="array" then length else 0 end' "$STAGE/pm2-procs.json" 2>/dev/null || echo 0)"
+    n_root="$(jq -r 'if type=="array" then length else 0 end' "$STAGE/pm2-procs-root.json" 2>/dev/null || echo 0)"
+    if [ "${n_root:-0}" -gt "${n_user:-0}" ] 2>/dev/null; then
+      mv -f "$STAGE/pm2-procs-root.json" "$STAGE/pm2-procs.json"
+    else
+      rm -f "$STAGE/pm2-procs-root.json"
+    fi
+  fi
+  [ -s "$STAGE/pm2-procs.json" ] || rm -f "$STAGE/pm2-procs.json"
+
+  best="" best_n=-1 best_t=0
+  for d in "${PM2_HOME:-}" "$HOME/.pm2" "/root/.pm2" "/home/runner/.pm2" /home/*/.pm2; do
+    [ -n "$d" ] || continue
+    f="$d/dump.pm2"
+    [ -s "$f" ] || continue
+    n="$(jq -r 'if type=="array" then length else -1 end' "$f" 2>/dev/null)"; n="${n:--1}"
+    t="$(stat -c %Y "$f" 2>/dev/null)"; t="${t:-0}"
+    if [ "$n" -gt "$best_n" ] || { [ "$n" -eq "$best_n" ] && [ "$t" -gt "$best_t" ]; }; then
+      best="$f"; best_n="$n"; best_t="$t"
     fi
   done
-  if [ -n "$PM2_DUMP" ]; then
-    sudo cp "$PM2_DUMP" "$STAGE/pm2-dump" 2>/dev/null || cp "$PM2_DUMP" "$STAGE/pm2-dump" 2>/dev/null || true
-    log "pm2 process list saved from $PM2_DUMP"
+
+  if [ -n "$best" ] && [ "$best_n" -gt 0 ] 2>/dev/null; then
+    if sudo cp -f "$best" "$STAGE/pm2-dump" 2>/dev/null || cp -f "$best" "$STAGE/pm2-dump" 2>/dev/null; then
+      log "pm2 state saved: $best ($best_n process(es))"
+    else
+      log "WARN: could not read pm2 dump $best"
+      rm -f "$STAGE/pm2-dump"
+    fi
   else
-    log "WARN: pm2 dump file not found"
+    log "WARN: no non-empty pm2 dump found (jlist fallback: $([ -f "$STAGE/pm2-procs.json" ] && echo present || echo absent))"
   fi
 fi
 
@@ -61,10 +89,20 @@ else
         log "WARN: only $(( LEFT / 60 )) min left — stopping docker image backup before $c"
         break
       fi
-      IMAGE_TAG="backup-${c}"
+      # Store the image under the container's OWN name — no "backup-" prefix —
+      # so restore needs no renaming step at all. The only exception is a name
+      # that already belongs to an unrelated (pulled) image: there we keep the
+      # legacy "backup-" prefix, and restore.sh strips it again.
+      IMAGE_TAG="$c"
+      if docker image inspect "$IMAGE_TAG" >/dev/null 2>&1 \
+         && [ "$(docker image inspect -f '{{index .Config.Labels "io.vps-relay.backup"}}' "$IMAGE_TAG" 2>/dev/null)" != "1" ]; then
+        log "note: unrelated image named '$c' exists — storing as backup-$c"
+        IMAGE_TAG="backup-${c}"
+      fi
       log "committing container $c -> $IMAGE_TAG"
-      docker commit "$c" "$IMAGE_TAG" >/dev/null 2>&1 || { log "WARN: commit $c failed"; continue; }
-      log "saving $IMAGE_TAG"
+      docker commit -c "LABEL io.vps-relay.backup=1" "$c" "$IMAGE_TAG" >/dev/null 2>&1 \
+        || { log "WARN: commit $c failed"; continue; }
+      log "saving image $IMAGE_TAG (container $c)"
       # .part + rename: a failed save must never leave a half-written image
       # that restore.sh would try to load.
       if docker save "$IMAGE_TAG" 2>/dev/null | gzip -1 > "$STAGE/images/$c.tar.gz.part"; then
@@ -186,6 +224,7 @@ INCLUDES=(meta.json)
 [ -n "$(ls -A "$STAGE/containers" 2>/dev/null)" ] && INCLUDES+=(containers)
 [ -f "$STAGE/home/home.tar.gz" ] && INCLUDES+=(home)
 [ -f "$STAGE/pm2-dump" ] && INCLUDES+=(pm2-dump)
+[ -f "$STAGE/pm2-procs.json" ] && INCLUDES+=(pm2-procs.json)
 # the volume archives live in the stage root — they were never included before
 for v in "$STAGE"/vol-*.tar.gz; do
   [ -f "$v" ] && INCLUDES+=("$(basename "$v")")
