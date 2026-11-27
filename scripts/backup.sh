@@ -45,27 +45,43 @@ if command -v pm2 &>/dev/null; then
   fi
   [ -s "$STAGE/pm2-procs.json" ] || rm -f "$STAGE/pm2-procs.json"
 
-  best="" best_n=-1 best_t=0
+  # A dump may live in a root-owned directory the runner cannot stat (e.g.
+  # /root on a hosted runner), so probe directly AND via sudo -n.
+  dump_read() {
+    cat "$1" 2>/dev/null && return 0
+    sudo -n cat "$1" 2>/dev/null
+    return $?
+  }
+
+  best="" best_n=-1 best_t=0 best_content=""
   for d in "${PM2_HOME:-}" "$HOME/.pm2" "/root/.pm2" "/home/runner/.pm2" /home/*/.pm2; do
     [ -n "$d" ] || continue
     f="$d/dump.pm2"
-    [ -s "$f" ] || continue
-    n="$(jq -r 'if type=="array" then length else -1 end' "$f" 2>/dev/null)"; n="${n:--1}"
+    content="$(dump_read "$f")"
+    [ -n "$content" ] || continue
+    n="$(printf '%s' "$content" | jq -r 'if type=="array" then length else -1 end' 2>/dev/null)"
+    n="${n:--1}"
+    [ "$n" -gt 0 ] 2>/dev/null || continue          # skip empty/corrupt dumps
     t="$(stat -c %Y "$f" 2>/dev/null)"; t="${t:-0}"
     if [ "$n" -gt "$best_n" ] || { [ "$n" -eq "$best_n" ] && [ "$t" -gt "$best_t" ]; }; then
-      best="$f"; best_n="$n"; best_t="$t"
+      best="$f"; best_n="$n"; best_t="$t"; best_content="$content"
     fi
   done
 
-  if [ -n "$best" ] && [ "$best_n" -gt 0 ] 2>/dev/null; then
-    if sudo cp -f "$best" "$STAGE/pm2-dump" 2>/dev/null || cp -f "$best" "$STAGE/pm2-dump" 2>/dev/null; then
+  if [ -n "$best_content" ]; then
+    if printf '%s' "$best_content" > "$STAGE/pm2-dump" 2>/dev/null; then
       log "pm2 state saved: $best ($best_n process(es))"
     else
-      log "WARN: could not read pm2 dump $best"
+      log "WARN: could not write pm2 dump to stage"
       rm -f "$STAGE/pm2-dump"
     fi
+  elif [ -s "$STAGE/pm2-procs.json" ]; then
+    # pm2's dump IS the jlist array — synthesise it so the next restore has
+    # real state even when no dump file was readable.
+    cp -f "$STAGE/pm2-procs.json" "$STAGE/pm2-dump"
+    log "pm2 state synthesised from 'pm2 jlist' ($(jq -r 'length' "$STAGE/pm2-dump" 2>/dev/null || echo '?') process(es))"
   else
-    log "WARN: no non-empty pm2 dump found (jlist fallback: $([ -f "$STAGE/pm2-procs.json" ] && echo present || echo absent))"
+    log "WARN: no pm2 state found (no readable dump and no jlist output)"
   fi
 fi
 
