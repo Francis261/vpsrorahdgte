@@ -34,10 +34,11 @@ while true; do
   NOW="$(now_epoch)"
   ELAPSED=$(( (NOW - START) / 60 ))
 
-  # Health check: verify pm2 and docker are responsive
+  # Health check: verify pm2 and docker are responsive (bounded — a hung
+  # daemon must not stall the hold/backup loop itself)
   if [ "$ELAPSED" -gt 0 ] && [ $((ELAPSED % 5)) -eq 0 ]; then
-    pm2 ping >/dev/null 2>&1 || log "WARN: pm2 not responding"
-    docker info >/dev/null 2>&1 || log "WARN: docker not responding"
+    timeout 30 pm2 ping >/dev/null 2>&1 || log "WARN: pm2 not responding"
+    timeout 30 docker info >/dev/null 2>&1 || log "WARN: docker not responding"
   fi
 
   if [ "$NOW" -ge "$HOLD_UNTIL" ]; then

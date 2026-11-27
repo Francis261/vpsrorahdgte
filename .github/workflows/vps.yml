@@ -138,11 +138,13 @@ jobs:
 
       - name: Start pm2 services
         run: |
+          # every pm2 call is bounded — a stale God daemon must never stall
+          # this step (the restore step already cleaned/locked pm2 state)
           if [ -f "$GITHUB_WORKSPACE/services/ecosystem.config.js" ]; then
-            pm2 start "$GITHUB_WORKSPACE/services/ecosystem.config.js" 2>/dev/null || true
+            timeout 120 pm2 start "$GITHUB_WORKSPACE/services/ecosystem.config.js" 2>/dev/null || true
           fi
-          pm2 save 2>/dev/null || true
-          pm2 status
+          timeout 60 pm2 save 2>/dev/null || true
+          timeout 60 pm2 status || echo "WARN: pm2 status unavailable"
 
       - name: Start heartbeat (background)
         run: |
