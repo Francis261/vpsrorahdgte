@@ -200,8 +200,9 @@ fi
 # Robust by design:
 #   * validate the state is a JSON array before trusting it
 #   * fall back to `pm2 jlist` output when the dump is missing/corrupt
-#   * rewrite stale /host/ paths to this workspace and drop procs whose script
-#     is gone (logged) instead of letting the whole resurrect fail
+#   * rewrite stale /host/ paths to this workspace; a proc whose script is not
+#     on this host yet (deps are excluded from the backup) is KEPT in the state
+#     and restored stopped — never dropped, never fatal
 #   * resurrect as root AND as the runner, then count what actually came back
 #   * last resort: rebuild the processes one at a time from the saved state
 WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}"
@@ -220,11 +221,12 @@ if [ -z "$pm2_state" ]; then
 elif [ -z "$PM2_BIN" ]; then
   log "WARN: pm2 not installed on this runner — skipping pm2 restore"
 else
-  # ---- fix paths belonging to a previous runner, drop dead entries --------
-  FIX_MSG="$(python3 - "$pm2_state" "$WORKSPACE" <<'PY'
+  # ---- fix paths belonging to a previous runner, keep dead entries stopped --
+  MISSING_FILE="$STAGE/pm2-missing.txt"
+  FIX_MSG="$(python3 - "$pm2_state" "$WORKSPACE" "$MISSING_FILE" <<'PY'
 import json, os, sys
 
-path, workspace = sys.argv[1], sys.argv[2]
+path, workspace, missing_path = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     data = json.load(open(path))
 except Exception as e:
@@ -239,18 +241,25 @@ def remap(v):
         return workspace.rstrip("/") + "/" + v.split("/host/", 1)[1]
     return v
 
-alive, dropped = [], 0
+alive, stopped = [], []
 for proc in data:
     env = proc.get("pm2_env") or {}
     cwd = remap(env.get("pm_cwd") or "")
     exe = remap(env.get("pm_exec_path") or "")
+    name = proc.get("name") or env.get("name") or "?"
     if exe and not os.path.exists(exe):
         alt = os.path.join(workspace, os.path.basename(exe))
         if os.path.exists(alt):
             exe = alt
         else:
-            print(f"drop {proc.get('name', '?')}: script missing ({exe})")
-            dropped += 1
+            # deps (node_modules, …) are not in the backup, so the script may
+            # legitimately be absent on a fresh host: keep the process, stop it.
+            print(f"keep {name}: script not on this host yet ({exe}) - restored stopped")
+            stopped.append(name)
+            env["status"] = "stopped"
+            env["unstable_restarts"] = 0
+            proc["pm2_env"] = env
+            alive.append(proc)
             continue
     if not cwd or not os.path.isdir(cwd):
         cwd = workspace
@@ -260,7 +269,8 @@ for proc in data:
     proc["pm2_env"] = env
     alive.append(proc)
 json.dump(alive, open(path, "w"))
-print(f"{len(alive)} process(es) restorable, {dropped} dropped")
+open(missing_path, "w").write("\n".join(stopped) + ("\n" if stopped else ""))
+print(f"{len(alive)} process(es) restorable, {len(stopped)} kept stopped")
 PY
 )"
   fix_rc=$?
@@ -268,7 +278,10 @@ PY
   [ "$fix_rc" -ne 0 ] && log "WARN: pm2 state could not be rewritten — trying it as-is"
 
   # ---- install the dump in every pm2 home --------------------------------
+  seen_dirs=" "
   for pm_dir in "/root/.pm2" "$HOME/.pm2" "/home/runner/.pm2"; do
+    case "$seen_dirs" in *" $pm_dir "*) continue ;; esac
+    seen_dirs="$seen_dirs$pm_dir "
     if [ "$pm_dir" = "/root/.pm2" ]; then
       sudo mkdir -p "$pm_dir" 2>/dev/null || true
       sudo cp -f "$pm2_state" "$pm_dir/dump.pm2" 2>/dev/null || true
@@ -325,7 +338,7 @@ for p in procs:
         if alt and os.path.exists(alt):
             exe = alt
         else:
-            print(f"skip {name}: script not found ({exe or 'no path'})")
+            print(f"keep {name}: script not on this host yet ({exe or 'no path'}) - left stopped")
             continue
     if not cwd or not os.path.isdir(cwd):
         cwd = workspace
@@ -358,6 +371,19 @@ PY
     [ "$fb_rc" -ne 0 ] && log "WARN: pm2 fallback restart errored"
     count="$(pm2 jlist 2>/dev/null | jq -r 'if type=="array" then length else 0 end' 2>/dev/null || echo 0)"
     case "$count" in ''|*[!0-9]*) count=0 ;; esac
+  fi
+
+  # ---- procs whose script is not on this host yet: kept, but stopped ------
+  # They stay in the dump (so nothing is lost and the next cycle sees them)
+  # instead of being dropped — the script usually reappears once dependencies
+  # are installed, and the process can then be started with `pm2 start <name>`.
+  if [ -s "$MISSING_FILE" ]; then
+    while IFS= read -r nm; do
+      [ -n "$nm" ] || continue
+      pm2 stop "$nm" >/dev/null 2>&1 || true
+      sudo env PM2_HOME=/root/.pm2 "$PM2_BIN" stop "$nm" >/dev/null 2>&1 || true
+      log "pm2: '$nm' restored but stopped (script not on this host yet)"
+    done < "$MISSING_FILE"
   fi
 
   # persist whatever came back so the next cycle's backup sees it
