@@ -230,6 +230,28 @@ elif [ -f "$STAGE/pm2-procs.json" ] && jq -e 'type == "array"' "$STAGE/pm2-procs
   pm2_state="$STAGE/pm2-procs.json"
 fi
 
+# Normalise to pm2's REAL dump format (flat pm2_env objects) before anything
+# installs it as dump.pm2: resurrect feeds each entry straight to
+# God.prepare(), which reads entry.env — jlist {name, pm2_env} wrappers make
+# it throw, the RPC never replies and the CLI waits forever (observed as the
+# 120s resurrect timeouts).
+if [ -n "$pm2_state" ]; then
+  FLAT_STATE="$STAGE/pm2-dump.flat"
+  if jq 'map(
+          if type == "object" and has("pm2_env") and (.pm2_env | type) == "object" then
+            (.pm2_env | del(.pm_id)) as $e
+            | (if ($e.name // null) == null and (.name // null) != null then $e + {name: .name} else $e end)
+          else .
+          end
+        )' "$pm2_state" > "$FLAT_STATE" 2>/dev/null \
+     && jq -e 'type == "array"' "$FLAT_STATE" >/dev/null 2>&1; then
+    pm2_state="$FLAT_STATE"
+  else
+    rm -f "$FLAT_STATE"
+    log "WARN: pm2 state could not be normalised to dump format — using it as-is"
+  fi
+fi
+
 if [ -z "$pm2_state" ]; then
   log "no usable pm2 state in backup (nothing to resurrect)"
 elif [ -z "$PM2_BIN" ]; then
@@ -257,7 +279,15 @@ def remap(v):
 
 alive, stopped = [], []
 for proc in data:
-    env = proc.get("pm2_env") or {}
+    if not isinstance(proc, dict):
+        continue
+    # Accept both state shapes: jlist wrappers ({name, pm2_env}) and the real
+    # dump format (flat pm2_env objects). env REFERENCEs the dict inside proc,
+    # so mutations apply in place — never re-assign proc["pm2_env"] = env or a
+    # flat entry would become self-referential (json.dump would blow up).
+    env = proc.get("pm2_env")
+    if not isinstance(env, dict):
+        env = proc
     cwd = remap(env.get("pm_cwd") or "")
     exe = remap(env.get("pm_exec_path") or "")
     name = proc.get("name") or env.get("name") or "?"
@@ -272,7 +302,6 @@ for proc in data:
             stopped.append(name)
             env["status"] = "stopped"
             env["unstable_restarts"] = 0
-            proc["pm2_env"] = env
             alive.append(proc)
             continue
     if not cwd or not os.path.isdir(cwd):
@@ -280,7 +309,6 @@ for proc in data:
     env["pm_cwd"] = cwd
     if exe:
         env["pm_exec_path"] = exe
-    proc["pm2_env"] = env
     alive.append(proc)
 json.dump(alive, open(path, "w"))
 open(missing_path, "w").write("\n".join(stopped) + ("\n" if stopped else ""))
@@ -349,7 +377,12 @@ except Exception as e:
 
 started = 0
 for p in procs:
-    env = p.get("pm2_env") or {}
+    if not isinstance(p, dict):
+        continue
+    # both state shapes: jlist wrappers and flat dump entries (see the fixer)
+    env = p.get("pm2_env")
+    if not isinstance(env, dict):
+        env = p
     name = p.get("name") or env.get("name") or f"restored-{started}"
     exe = env.get("pm_exec_path") or ""
     cwd = env.get("pm_cwd") or workspace
@@ -362,17 +395,26 @@ for p in procs:
         else:
             print(f"keep {name}: script not on this host yet ({exe or 'no path'}) - left stopped")
             continue
+    if env.get("status") == "stopped":
+        print(f"keep {name}: saved as stopped - not started")
+        continue
     if not cwd or not os.path.isdir(cwd):
         cwd = workspace
     cmd = [pm2_bin, "start", exe, "--name", name, "--cwd", cwd]
     if env.get("exec_mode") == "cluster":
         cmd += ["-i", "max"]
-    interp = env.get("interpreter") or ""
-    if interp and interp not in ("node", "none"):
+    interp = env.get("exec_interpreter") or env.get("interpreter") or ""
+    if interp and os.path.basename(interp) not in ("node", "nodejs", "none"):
         cmd += ["--interpreter", interp]
-    args = env.get("args") or ""
+    # args is a JSON LIST in both pm2 dumps and jlist (strings only in very
+    # old dumps) — shlex.split() on a list raises and used to kill the loop
+    args = env.get("args") or []
+    if isinstance(args, str):
+        args = shlex.split(args) if args.strip() else []
+    elif not isinstance(args, list):
+        args = [str(args)]
     if args:
-        cmd += ["--"] + shlex.split(args)
+        cmd += ["--"] + [str(a) for a in args]
     app_env = dict(os.environ)
     for k, v in (env.get("env") or {}).items():
         if str(k) == "PM2_HOME":

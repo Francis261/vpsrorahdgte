@@ -73,21 +73,45 @@ if command -v pm2 &>/dev/null; then
     fi
   done
 
+  # pm2's resurrect feeds every dump entry straight to God.prepare(), which
+  # reads entry.env — jlist-style {name, pm2_env} wrappers make it throw, the
+  # RPC never replies and the CLI hangs forever. So the STAGED dump is always
+  # written in pm2's real dump format: flat pm2_env objects (jlist wrappers
+  # are unwrapped, pm_id is dropped because pm2 assigns its own on resurrect).
+  dump_normalise() {
+    jq 'map(
+          if type == "object" and has("pm2_env") and (.pm2_env | type) == "object" then
+            (.pm2_env | del(.pm_id)) as $e
+            | (if ($e.name // null) == null and (.name // null) != null then $e + {name: .name} else $e end)
+          else .
+          end
+        )' 2>/dev/null
+  }
+
+  staged=""
   if [ -n "$best_content" ]; then
-    if printf '%s' "$best_content" > "$STAGE/pm2-dump" 2>/dev/null; then
+    if printf '%s' "$best_content" | dump_normalise > "$STAGE/pm2-dump" \
+       && [ -s "$STAGE/pm2-dump" ]; then
       log "pm2 state saved: $best ($best_n process(es))"
+      staged=1
     else
-      log "WARN: could not write pm2 dump to stage"
+      log "WARN: could not stage pm2 dump $best"
       rm -f "$STAGE/pm2-dump"
     fi
-  elif [ -s "$STAGE/pm2-procs.json" ]; then
-    # pm2's dump IS the jlist array — synthesise it so the next restore has
-    # real state even when no dump file was readable.
-    cp -f "$STAGE/pm2-procs.json" "$STAGE/pm2-dump"
-    log "pm2 state synthesised from 'pm2 jlist' ($(jq -r 'length' "$STAGE/pm2-dump" 2>/dev/null || echo '?') process(es))"
-  else
-    log "WARN: no pm2 state found (no readable dump and no jlist output)"
   fi
+  if [ -z "$staged" ] && [ -s "$STAGE/pm2-procs.json" ]; then
+    # no readable dump: synthesise one from 'pm2 jlist' so the next restore
+    # gets real state even when every pm2 save found nothing.
+    if dump_normalise < "$STAGE/pm2-procs.json" > "$STAGE/pm2-dump" \
+       && [ -s "$STAGE/pm2-dump" ]; then
+      log "pm2 state synthesised from 'pm2 jlist' ($(jq -r 'length' "$STAGE/pm2-dump" 2>/dev/null || echo '?') process(es))"
+      staged=1
+    else
+      log "WARN: could not synthesise pm2 state from jlist"
+      rm -f "$STAGE/pm2-dump"
+    fi
+  fi
+  [ -n "$staged" ] || log "WARN: no pm2 state found (no readable dump and no jlist output)"
 fi
 
 # ── 2. Docker images + container configs ────────────────────────────────────
