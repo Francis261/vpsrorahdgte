@@ -88,6 +88,53 @@ else
   done
   log "restored $VOL_COUNT docker volumes"
 
+  # ── 3b. Docker networks referenced by the saved configs ─────────────
+  # Compose networks (e.g. tgb9_default) are neither images nor volumes, so a
+  # fresh runner has none of them — without this, recreate dies with
+  # "failed to set up container networking: network X not found".
+  CONTAINER_FAILS=0
+  if ls "$STAGE"/containers/*.json >/dev/null 2>&1; then
+    NET_LIST="$(python3 - "$STAGE/containers" <<'PY'
+import glob, json, os, sys
+
+skip = {"bridge", "host", "none", "default"}
+want = set()
+
+def scan(c):
+    if not isinstance(c, dict):
+        return
+    hc = c.get("HostConfig") or {}
+    nm = hc.get("NetworkMode") or ""
+    if nm and nm not in skip and not nm.startswith(("container:", "service:")):
+        want.add(nm)
+    nets = (c.get("NetworkSettings") or {}).get("Networks") or {}
+    if isinstance(nets, dict):
+        for k in nets:
+            if k not in skip and not k.startswith(("container:", "service:")):
+                want.add(k)
+
+for p in glob.glob(os.path.join(sys.argv[1], "*.json")):
+    try:
+        data = json.load(open(p))
+    except Exception:
+        continue
+    # docker inspect writes a LIST of container configs; be forgiving either way
+    for c in (data if isinstance(data, list) else [data]):
+        scan(c)
+for n in sorted(want):
+    print(n)
+PY
+)"
+    for n in $NET_LIST; do
+      docker network inspect "$n" >/dev/null 2>&1 && continue
+      if docker network create "$n" >/dev/null 2>&1; then
+        log "created docker network: $n"
+      else
+        log "WARN: could not create docker network: $n"
+      fi
+    done
+  fi
+
   # ── 4. Docker containers (recreate from saved configs) ──────────────
   if [ -d "$STAGE/containers" ]; then
     for cfg in "$STAGE"/containers/*.json; do
@@ -131,7 +178,7 @@ else
       elif [ -n "$IMAGE" ]; then
         log "recreating container: $c from config"
         # Extract config and recreate with original settings
-        python3 - "$cfg" "$IMAGE" <<'PY'
+        CRE_OUT="$(python3 - "$cfg" "$IMAGE" 2>&1 <<'PY'
 import json, sys, subprocess
 
 cfg_file, image = sys.argv[1], sys.argv[2]
@@ -189,11 +236,21 @@ if result.returncode == 0:
 else:
     print(f"FAIL: {result.stderr.strip()}", file=sys.stderr)
 PY
+)"
+        CRE_RC=$?
+        # re-emit the builder's output (it was swallowed by the capture),
+        # then count a container as failed on an explicit FAIL or a crash
+        printf '%s\n' "$CRE_OUT"
+        if [ "$CRE_RC" -ne 0 ] || printf '%s\n' "$CRE_OUT" | grep -q '^FAIL:'; then
+          CONTAINER_FAILS=$((CONTAINER_FAILS+1))
+        fi
       else
         log "WARN: container $c — no image found (checked $c, backup-$c, backup-backup-$c)"
+        CONTAINER_FAILS=$((CONTAINER_FAILS+1))
       fi
     done
   fi
+  [ "$CONTAINER_FAILS" -eq 0 ] || log "WARN: $CONTAINER_FAILS container(s) did NOT come back — see FAIL lines above"
 fi
 
 # ── 5. PM2 processes ────────────────────────────────────────────────
@@ -458,7 +515,13 @@ PY
   pm2_run  save >/dev/null 2>&1 || true
   pm2_root save >/dev/null 2>&1 || true
   log "pm2 restore finished: $count process(es) running"
-  pm2_run list 2>/dev/null || true
+  # show the list that actually has the processes: most services run as root,
+  # so an empty runner-home table here used to look like a failed restore
+  if pm2_root jlist 2>/dev/null | jq -e 'type=="array" and length>0' >/dev/null 2>&1; then
+    pm2_root list 2>/dev/null || pm2_run list 2>/dev/null || true
+  else
+    pm2_run list 2>/dev/null || true
+  fi
 fi
 
 # ── 6. Set root password ────────────────────────────────────────────
