@@ -83,7 +83,10 @@ tunnel_uuid()           { must_jq '.tunnel.tunnel_uuid // ""' ""; }
 
 # Backup exclusion list — JSON array (mustBackup.json) + always-on built-ins.
 # Built-ins cover the volatile/huge dirs that must never be archived (npm and
-# pm2 logs change while tar reads them, which makes tar exit 1).
+# pm2 logs change while tar reads them, which makes tar exit 1). The pm2 pid/
+# socket files are excluded too: they point at daemons on the SOURCE host and
+# would only make the pm2 CLI on a fresh restore target wait for a daemon that
+# does not exist there.
 backup_home_excludes() {
   {
     jq -r '.backup.home_exclude[]? // empty' "$REPO_ROOT/mustBackup.json" 2>/dev/null
@@ -91,7 +94,8 @@ backup_home_excludes() {
       .cache .npm .yarn node_modules .nvm go .cargo .rustup .gradle .m2 .android \
       .vscode-server .vscode .config/Code .local/share/Trash .local/share/pnpm \
       .local/share/flatpak .ansible/collections .azure .dotnet .ghcup \
-      .pm2/logs .pm2/pm2.log
+      .pm2/logs .pm2/pm2.log \
+      .pm2/pm2.pid .pm2/pm2.pub .pm2/pm2.sub .pm2/pm2.sock
   } | sort -u | while IFS= read -r pat; do
       [ -n "$pat" ] && echo "--exclude=$pat"
     done
