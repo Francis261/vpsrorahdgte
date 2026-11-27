@@ -101,6 +101,10 @@ jobs:
           ss -tln | grep ':22 ' || { echo "ERROR: sshd not listening on 22"; exit 1; }
 
       - name: Restore state from storage
+        # generous vs the ~10 min this normally takes, but a hung pm2/docker
+        # call must not stall the job for hours (the scripts also bound every
+        # pm2 call themselves — this is the last-resort backstop)
+        timeout-minutes: 40
         run: bash scripts/restore.sh
 
       - name: Free disk after restore

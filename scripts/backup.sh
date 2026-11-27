@@ -30,11 +30,16 @@ log "backup starting (time left: $(( LEFT / 60 )) min)"
 #   * validate the dump is a JSON array before trusting it
 #   * also store `pm2 jlist` output as a fallback source for restore
 if command -v pm2 &>/dev/null; then
-  pm2 save >/dev/null 2>&1 || true
-  sudo pm2 save >/dev/null 2>&1 || true
+  # bounded: a stale God daemon must never stall the whole backup job
+  PM2_TIMEOUT="${PM2_TIMEOUT:-60}"
+  if command -v timeout >/dev/null 2>&1; then pm2t() { timeout "$PM2_TIMEOUT" "$@"; }
+  else pm2t() { "$@"; }; fi
 
-  pm2 jlist > "$STAGE/pm2-procs.json" 2>/dev/null || true
-  if sudo pm2 jlist > "$STAGE/pm2-procs-root.json" 2>/dev/null; then
+  pm2t pm2 save >/dev/null 2>&1 || true
+  pm2t sudo pm2 save >/dev/null 2>&1 || true
+
+  pm2t pm2 jlist > "$STAGE/pm2-procs.json" 2>/dev/null || true
+  if pm2t sudo pm2 jlist > "$STAGE/pm2-procs-root.json" 2>/dev/null; then
     n_user="$(jq -r 'if type=="array" then length else 0 end' "$STAGE/pm2-procs.json" 2>/dev/null || echo 0)"
     n_root="$(jq -r 'if type=="array" then length else 0 end' "$STAGE/pm2-procs-root.json" 2>/dev/null || echo 0)"
     if [ "${n_root:-0}" -gt "${n_user:-0}" ] 2>/dev/null; then

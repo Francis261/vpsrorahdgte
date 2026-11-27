@@ -208,6 +208,20 @@ fi
 WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}"
 PM2_BIN="$(command -v pm2 || true)"
 
+# Every pm2 CLI call is bounded. The home archive restores /root/.pm2 —
+# including a pm2.pid written on the source host whose process does not exist
+# here — and pm2 then waits forever for a God daemon that never answers
+# (observed: the "Restore state from storage" step never returned).
+# Anything that does not finish in time is abandoned; the next fallback runs.
+PM2_TIMEOUT="${PM2_TIMEOUT:-120}"
+if command -v timeout >/dev/null 2>&1; then
+  pm2t()     { timeout "$PM2_TIMEOUT" "$@"; }
+else
+  pm2t()     { "$@"; }
+fi
+pm2_root()  { pm2t sudo env PM2_HOME=/root/.pm2 "$PM2_BIN" "$@"; }
+pm2_run()   { pm2t env PM2_HOME="$HOME/.pm2" "$PM2_BIN" "$@"; }
+
 pm2_state=""
 if [ -f "$STAGE/pm2-dump" ] && jq -e 'type == "array"' "$STAGE/pm2-dump" >/dev/null 2>&1; then
   pm2_state="$STAGE/pm2-dump"
@@ -292,10 +306,18 @@ PY
     [ -s "$pm_dir/dump.pm2" ] && log "pm2 dump installed at $pm_dir/dump.pm2"
   done
 
+  # ---- clear stale God daemons / pid locks FIRST: a pm2.pid restored from
+  # ---- the source host points at a process that does not exist on this
+  # ---- runner and every pm2 call would then block on it forever ----------
+  pm2_root kill >/dev/null 2>&1 || true
+  pm2_run  kill >/dev/null 2>&1 || true
+  sudo rm -f /root/.pm2/pm2.pid 2>/dev/null || true
+  rm -f "$HOME/.pm2/pm2.pid" 2>/dev/null || true
+
   # ---- resurrect, root first (that's where the real state lives) ---------
   count=0
-  if sudo env PM2_HOME=/root/.pm2 "$PM2_BIN" resurrect >/dev/null 2>&1; then
-    count="$(sudo env PM2_HOME=/root/.pm2 "$PM2_BIN" jlist 2>/dev/null \
+  if pm2_root resurrect >/dev/null 2>&1; then
+    count="$(pm2_root jlist 2>/dev/null \
       | jq -r 'if type=="array" then length else 0 end' 2>/dev/null || echo 0)"
     log "pm2 resurrect (root): $count process(es)"
   else
@@ -304,8 +326,8 @@ PY
   case "$count" in ''|*[!0-9]*) count=0 ;; esac
 
   if [ "$count" -eq 0 ]; then
-    if env PM2_HOME="$HOME/.pm2" "$PM2_BIN" resurrect >/dev/null 2>&1; then
-      count="$(env PM2_HOME="$HOME/.pm2" "$PM2_BIN" jlist 2>/dev/null \
+    if pm2_run resurrect >/dev/null 2>&1; then
+      count="$(pm2_run jlist 2>/dev/null \
         | jq -r 'if type=="array" then length else 0 end' 2>/dev/null || echo 0)"
       log "pm2 resurrect (runner): $count process(es)"
     fi
@@ -356,7 +378,11 @@ for p in procs:
         if str(k) == "PM2_HOME":
             continue
         app_env[str(k)] = str(v)
-    r = subprocess.run(cmd, capture_output=True, text=True, env=app_env)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, env=app_env, timeout=60)
+    except subprocess.TimeoutExpired:
+        print(f"FAIL {name}: pm2 start timed out")
+        continue
     if r.returncode == 0:
         started += 1
         print(f"started {name}")
@@ -369,7 +395,7 @@ PY
     fb_rc=$?
     while IFS= read -r line; do [ -n "$line" ] && log "pm2: $line"; done <<< "$FB_MSG"
     [ "$fb_rc" -ne 0 ] && log "WARN: pm2 fallback restart errored"
-    count="$(pm2 jlist 2>/dev/null | jq -r 'if type=="array" then length else 0 end' 2>/dev/null || echo 0)"
+    count="$(pm2_run jlist 2>/dev/null | jq -r 'if type=="array" then length else 0 end' 2>/dev/null || echo 0)"
     case "$count" in ''|*[!0-9]*) count=0 ;; esac
   fi
 
@@ -380,17 +406,17 @@ PY
   if [ -s "$MISSING_FILE" ]; then
     while IFS= read -r nm; do
       [ -n "$nm" ] || continue
-      pm2 stop "$nm" >/dev/null 2>&1 || true
-      sudo env PM2_HOME=/root/.pm2 "$PM2_BIN" stop "$nm" >/dev/null 2>&1 || true
+      pm2_run  stop "$nm" >/dev/null 2>&1 || true
+      pm2_root stop "$nm" >/dev/null 2>&1 || true
       log "pm2: '$nm' restored but stopped (script not on this host yet)"
     done < "$MISSING_FILE"
   fi
 
   # persist whatever came back so the next cycle's backup sees it
-  pm2 save >/dev/null 2>&1 || true
-  sudo env PM2_HOME=/root/.pm2 "$PM2_BIN" save >/dev/null 2>&1 || true
+  pm2_run  save >/dev/null 2>&1 || true
+  pm2_root save >/dev/null 2>&1 || true
   log "pm2 restore finished: $count process(es) running"
-  pm2 list 2>/dev/null || true
+  pm2_run list 2>/dev/null || true
 fi
 
 # ── 6. Set root password ────────────────────────────────────────────
